@@ -3,7 +3,7 @@ import os
 
 load_dotenv()
 
-API_ID = int(os.getenv("37501805"))
-API_HASH = os.getenv("33d7d16f896c1371b1ea1083c09ccd06")
-BOT_TOKEN = os.getenv("8998408986:AAFsWjdDDckd5PqArrrJlwPhNO4U_RoIGnE")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 STRING_SESSION = os.getenv("STRING_SESSION")
