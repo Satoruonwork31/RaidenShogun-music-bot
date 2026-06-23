@@ -17,8 +17,15 @@ async def id_command(client, message):
 
     if len(message.command) >= 2:
         raw = message.command[1].lstrip("@")
+        from bot.client import userbot
         try:
-            u = await client.get_users(int(raw) if raw.isdigit() else raw)
+            if raw.isdigit():
+                u = await client.get_users(int(raw))
+            else:
+                try:
+                    u = await userbot.get_users(raw)
+                except Exception:
+                    u = await client.get_users(raw)
         except Exception as exc:
             await message.reply_text(f"❌ Couldn't resolve `{raw}`: {exc}")
             return

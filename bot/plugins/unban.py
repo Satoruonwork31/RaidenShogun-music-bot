@@ -25,8 +25,16 @@ async def _resolve_target(client, message):
 
     raw = message.command[1].lstrip("@")
     reason = " ".join(message.command[2:]).strip()
+
+    from bot.client import userbot
     try:
-        user = await client.get_users(int(raw) if raw.isdigit() else raw)
+        if raw.isdigit():
+            user = await client.get_users(int(raw))
+        else:
+            try:
+                user = await userbot.get_users(raw)
+            except Exception:
+                user = await client.get_users(raw)
         return user, reason
     except Exception:
         return None, reason

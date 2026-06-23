@@ -26,11 +26,16 @@ async def _resolve_target(client, message):
     raw = message.command[1].lstrip("@")
     reason = " ".join(message.command[2:]).strip()
 
+    # Bot accounts can't always resolve @username; the userbot (MTProto) can.
+    from bot.client import userbot
     try:
         if raw.isdigit():
             user = await client.get_users(int(raw))
         else:
-            user = await client.get_users(raw)
+            try:
+                user = await userbot.get_users(raw)
+            except Exception:
+                user = await client.get_users(raw)
         return user, reason
     except Exception:
         return None, reason
