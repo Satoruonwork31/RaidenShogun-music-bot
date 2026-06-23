@@ -71,9 +71,40 @@ MESSAGES = [
     "{name} is gone. The chat finally smells like clean air and possibility. 🌬️",
     "{name} left. Even autocorrect refused to fix their last message. It knew. ❌",
     "{name} departed. We tried to be sad. We failed. We will not be trying again. 🫡",
+    # ---- batch 3: built to hurt ----
+    "{name} left. Nobody noticed for the first eleven minutes. Nobody minded for the rest. 🤍",
+    "{name} is gone. The group has been quietly thriving in the seconds since. Run the numbers, they're brutal. 📉",
+    "{name} left. We checked their chat history for one good moment. We're still checking. We've lost faith. 🕯️",
+    "{name} packed up and left. Don't take it personally — the chat felt like this years before they pressed the button. 💔",
+    "{name} departed. The hardest part was admitting we all stayed in this group longer than we stayed friends with them. 📜",
+    "{name} left. Statistically, this is the version of them this chat will remember best. Hold it close. 🫥",
+    "{name} is gone. Their group photo will be replaced with a blank pixel — a 1:1 representation of their impact. ⬛",
+    "{name} left. We thought about saying something nice. We sat with the silence. The silence said it better. 🔇",
+    "{name} departed. The notification said 'left the group.' It could have said 'finally understood.' 🪞",
+    "{name} is gone. Twelve people in this chat noticed before you did. None of them are sad. 😶",
+    "{name} left. There is a version of this story where they were missed. We're not in it. We've never been in it. 📖",
+    "{name} packed up. They were always packing up. They just finally walked out the door we'd been holding open. 🚪",
+    "{name} departed. The kindest thing we can do is not pretend we'll wonder how they're doing. 🪦",
+    "{name} left. Their last message will sit unanswered in our backlog forever — same place it was always headed. 📩",
+    "{name} is gone. The group photo composition just improved, the air just lightened, and three people just exhaled. 🌬️",
+    "{name} left. If you're reading this with the wrong feelings, that's the part to sit with. We've already moved on. 🪷",
+    "{name} departed. We checked who'd notice if they left. Nobody put their hand up. The vote was unanimous. ✋",
+    "{name} is gone. Their absence is louder than anything they ever said here. Quieter, somehow, too. 🌫️",
+    "{name} left. The polite thing would be a tribute. We'd rather be honest. The honest thing is a paragraph break. ❎",
+    "{name} packed their things. We helped. Quietly. For months. They never noticed. They were never going to. 🧹",
+    "{name} departed. The group chat survives. The friendships survive. The impression they made does not. 🍂",
+    "{name} left. We rewrote the group description in their honor. We removed two words. They were their name. ✂️",
+    "{name} is gone. They came in with a bang. They leave with a footnote. Most of us couldn't pick the font. 📝",
+    "{name} departed. Look around the chat. Nobody is looking back at the door. They never were. 🪟",
+    "{name} left. We'll never know which message of ours was the last one they read. We'll never wonder, either. 📬",
+    "{name} is gone. The version of them that lived in this chat dies with the notification. We won't be lighting candles. 🕯️",
+    "{name} left. We'd say the door is always open. It isn't. It locked itself. The chat picked the locksmith. 🔐",
+    "{name} departed. If you're hoping for closure — same. Closure isn't coming. It was never theirs to give. 🛑",
+    "{name} is gone. The group will keep going, exactly as it always has, just a little lighter. That's the whole eulogy. 🤍",
+    "{name} left. Read this slowly: nobody asked them to stay. Nobody is going to. That's not cruelty. That's just the room. 🪑",
 ]
 
-_HISTORY_SIZE = 12
+_HISTORY_SIZE = 18
 _lock = Lock()
 _recent: dict[int, deque] = {}
 
