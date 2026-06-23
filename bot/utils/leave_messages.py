@@ -40,9 +40,40 @@ MESSAGES = [
     "{name} is gone. Funeral arrangements: none. Attendance: none. Vibes: ascending. 🪦",
     "{name} took the express elevator out. Hope they read the maintenance notice. 🛗",
     "{name} left the chat. The remaining members got a 10% morale boost effective immediately. 📊",
+    # ---- batch 2: even more savage ----
+    "{name} left. Honestly we were one personality trait away from staging an intervention. 🛑",
+    "{name} exited the group. Sources confirm even their reflection unfollowed them. 🪞",
+    "{name} departed. Achievement unlocked: Self-Awareness (Bronze). 🏅",
+    "{name} ghosted us. Their charisma did the same to them years ago. ✌️",
+    "{name} left. The group hit fifteen seconds of silence before realizing it was finally peaceful. 🧘",
+    "{name} packed their grievances and left. Sadly they forgot their personality on the way out. 🎒",
+    "{name} bounced. Even the typing dots breathed a sigh of relief. ⌨️",
+    "{name} has exited. Effective immediately, the chat's collective braincell is back in service. 🧠",
+    "{name} left so hard the door bounced back twice. We added a brick to keep it shut. 🧱",
+    "{name} is gone. We've already redistributed their seat to a houseplant. The plant contributes more. 🪴",
+    "{name} unsubscribed. The algorithm learned a valuable lesson today. 🤖",
+    "{name} left. The eulogy fit on a sticky note. We didn't write one. 🗒️",
+    "{name} departed. Their group photo presence has been retroactively cropped out by popular demand. ✂️",
+    "{name} chose to leave before we chose for them. Respect for the speed run. ⏱️",
+    "{name} left. Honestly the only respectful thing they've ever done in here. 👏",
+    "{name} disappeared. The void looked at us and said 'no thanks, you keep them — wait, you don't have to anymore. 🫥",
+    "{name} left. Their last message will go unread, as a tradition we already started. 📩",
+    "{name} packed up. The collective dignity of this chat just rose by triple digits. 📈",
+    "{name} left the group. Even the captcha was relieved. 🤖",
+    "{name} dipped. Their replies were already in airplane mode anyway. ✈️",
+    "{name} exited. The group dynamic is now mathematically optimal. ➕",
+    "{name} left and we're already pretending they never joined. The history books agree. 📚",
+    "{name} bounced. They thought it was a flex. We're calling it a service. 💪",
+    "{name} left. The wifi got 30% faster. Coincidence? Statistically, no. 📶",
+    "{name} packed their issues and left. The luggage was overweight, the room is lighter. 🧳",
+    "{name} took the elevator down. Pressed every floor on the way out. We don't care. We're free. 🆓",
+    "{name} left. Their absence is the upgrade we waited months for. ⭐",
+    "{name} is gone. The chat finally smells like clean air and possibility. 🌬️",
+    "{name} left. Even autocorrect refused to fix their last message. It knew. ❌",
+    "{name} departed. We tried to be sad. We failed. We will not be trying again. 🫡",
 ]
 
-_HISTORY_SIZE = 6
+_HISTORY_SIZE = 12
 _lock = Lock()
 _recent: dict[int, deque] = {}
 
