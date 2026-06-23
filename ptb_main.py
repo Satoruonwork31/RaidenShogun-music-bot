@@ -464,10 +464,12 @@ def _format_welcome(user) -> str:
     first_name = user.first_name or "friend"
     last_name = user.last_name or ""
     full_name = (first_name + " " + last_name).strip() or "Unknown"
+    # Clickable name that opens the user's profile.
+    mention = f'<a href="tg://user?id={user.id}">{full_name}</a>'
     username = f"@{user.username}" if user.username else "(no username)"
     return WELCOME_TEMPLATE.format(
         first_name=first_name,
-        full_name=full_name,
+        full_name=mention,
         user_id=user.id,
         username=username,
     )
