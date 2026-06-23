@@ -14,6 +14,7 @@ PLUGINS = [
     "resume",
     "skip",
     "stop",
+    "toss",
 ]
 
 def load_plugins():
