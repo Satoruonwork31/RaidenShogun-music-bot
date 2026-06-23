@@ -1,8 +1,22 @@
 from pyrogram import Client, filters
+from pyrogram.enums import MessageEntityType
 
 
 @Client.on_message(filters.command("id"))
 async def id_command(client, message):
+    raw_text = message.text or ""
+
+    for ent in (message.entities or []):
+        if ent.type == MessageEntityType.TEXT_MENTION and ent.user:
+            u = ent.user
+            text = (
+                f"👤 User: {u.mention}\n"
+                f"🆔 User ID: `{u.id}`\n"
+                f"💬 Chat ID: `{message.chat.id}`"
+            )
+            await message.reply_text(text)
+            return
+
     reply = message.reply_to_message
 
     if reply and reply.from_user:

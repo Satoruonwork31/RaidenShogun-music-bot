@@ -1,5 +1,5 @@
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus, ChatType
+from pyrogram.enums import ChatMemberStatus, ChatType, MessageEntityType
 
 
 _ADMIN_STATUSES = (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
@@ -15,6 +15,16 @@ async def _is_admin(client, chat_id, user_id) -> bool:
 
 async def _resolve_target(client, message):
     """Return (target_user, leftover_args_as_reason)."""
+    text = message.text or ""
+
+    for ent in (message.entities or []):
+        if ent.type == MessageEntityType.TEXT_MENTION and ent.user:
+            mention_text = text[ent.offset:ent.offset + ent.length]
+            after_cmd = text.split(maxsplit=1)
+            after_cmd = after_cmd[1] if len(after_cmd) > 1 else ""
+            reason = after_cmd.replace(mention_text, "", 1).strip()
+            return ent.user, reason
+
     reply = message.reply_to_message
     if reply and reply.from_user:
         reason = " ".join(message.command[1:]).strip()
