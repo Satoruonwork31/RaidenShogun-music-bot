@@ -1,7 +1,10 @@
+import os
+
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ParseMode
 
 from bot.utils.greetings import is_enabled
+from bot.utils.welcome_image import render_welcome_card
 
 WELCOME_TEMPLATE = (
     '<tg-emoji emoji-id="5460858729962421671">👋</tg-emoji> Welcome, {first_name}!\n\n'
@@ -20,7 +23,6 @@ def _format(user) -> str:
     first_name = user.first_name or "friend"
     last_name = user.last_name or ""
     full_name = (first_name + " " + last_name).strip() or "Unknown"
-    # Clickable name that opens the user's profile.
     mention = f'<a href="tg://user?id={user.id}">{full_name}</a>'
     username = f"@{user.username}" if user.username else "(no username)"
     return WELCOME_TEMPLATE.format(
@@ -28,6 +30,32 @@ def _format(user) -> str:
         full_name=mention,
         user_id=user.id,
         username=username,
+    )
+
+
+async def _download_pfp(client, user_id: int) -> str | None:
+    try:
+        async for photo in client.get_chat_photos(user_id, limit=1):
+            os.makedirs("/tmp/raiden_pfps", exist_ok=True)
+            path = f"/tmp/raiden_pfps/{user_id}.jpg"
+            await client.download_media(photo.file_id, file_name=path)
+            return path
+    except Exception:
+        return None
+    return None
+
+
+async def _send_card(client, chat_id: int, user) -> None:
+    first_name = user.first_name or "friend"
+    last_name = user.last_name or ""
+    display_name = (first_name + " " + last_name).strip() or "friend"
+    avatar_path = await _download_pfp(client, user.id)
+    bio = await render_welcome_card(display_name, user.id, avatar_path)
+    await client.send_photo(
+        chat_id=chat_id,
+        photo=bio,
+        caption=_format(user),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -39,11 +67,7 @@ async def welcome_new_members(client, message):
     for user in message.new_chat_members:
         if user.is_bot:
             continue
-        await client.send_message(
-            chat_id=message.chat.id,
-            text=_format(user),
-            parse_mode=ParseMode.HTML,
-        )
+        await _send_card(client, message.chat.id, user)
 
 
 _JOIN_FROM = (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
@@ -63,8 +87,4 @@ async def welcome_via_chat_member(client, chat_member_updated):
         return
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
-        await client.send_message(
-            chat_id=chat_member_updated.chat.id,
-            text=_format(new_member.user),
-            parse_mode=ParseMode.HTML,
-        )
+        await _send_card(client, chat_member_updated.chat.id, new_member.user)

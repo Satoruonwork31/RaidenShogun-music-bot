@@ -464,7 +464,6 @@ def _format_welcome(user) -> str:
     first_name = user.first_name or "friend"
     last_name = user.last_name or ""
     full_name = (first_name + " " + last_name).strip() or "Unknown"
-    # Clickable name that opens the user's profile.
     mention = f'<a href="tg://user?id={user.id}">{full_name}</a>'
     username = f"@{user.username}" if user.username else "(no username)"
     return WELCOME_TEMPLATE.format(
@@ -472,6 +471,44 @@ def _format_welcome(user) -> str:
         full_name=mention,
         user_id=user.id,
         username=username,
+    )
+
+
+async def _download_user_pfp(context, user_id: int) -> str | None:
+    """Download the user's largest profile photo, or None if they don't have one."""
+    import os
+    try:
+        photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+    except Exception:
+        return None
+    if not photos or not photos.photos:
+        return None
+    largest = max(photos.photos[0], key=lambda p: p.width or 0)
+    try:
+        tg_file = await context.bot.get_file(largest.file_id)
+    except Exception:
+        return None
+    os.makedirs("/tmp/raiden_pfps", exist_ok=True)
+    path = f"/tmp/raiden_pfps/{user_id}.jpg"
+    try:
+        await tg_file.download_to_drive(path)
+    except Exception:
+        return None
+    return path
+
+
+async def _send_welcome(context, chat_id: int, user) -> None:
+    from bot.utils.welcome_image import render_welcome_card
+    first_name = user.first_name or "friend"
+    last_name = user.last_name or ""
+    display_name = (first_name + " " + last_name).strip() or "friend"
+    avatar_path = await _download_user_pfp(context, user.id)
+    bio = await render_welcome_card(display_name, user.id, avatar_path)
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=bio,
+        caption=_format_welcome(user),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -486,11 +523,7 @@ async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
     for user in msg.new_chat_members:
         if user.is_bot:
             continue
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=_format_welcome(user),
-            parse_mode=ParseMode.HTML,
-        )
+        await _send_welcome(context, update.effective_chat.id, user)
 
 
 async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -507,11 +540,7 @@ async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE
         from bot.utils.greetings import is_enabled
         if not is_enabled(update.effective_chat.id):
             return
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=_format_welcome(user),
-            parse_mode=ParseMode.HTML,
-        )
+        await _send_welcome(context, update.effective_chat.id, user)
 
 
 async def greetings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
