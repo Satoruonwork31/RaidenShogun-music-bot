@@ -1,4 +1,5 @@
 from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # Your start banner image
@@ -8,22 +9,24 @@ START_IMAGE = "https://i.ibb.co/YF6mgfVx/f1fa18a00964.jpg"
 @Client.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user = message.from_user
+    mention = user.mention
+    user_id = user.id
 
     caption = f"""
-✦  WELCOME TO RAIDEN SHOGUN <custom_emoji id="5994721794760642534"> 
+✦  WELCOME TO RAIDEN SHOGUN <tg-emoji emoji-id="5994721794760642534">🎵</tg-emoji>
 
 Hey {mention}!
 I'm Raiden Shogun, your premium music companion for Telegram Voice Chats.
 
-<custom_emoji id="6170427231802757303"> Fast • <custom_emoji id="5352865784508980799"> High Quality Audio
-<custom_emoji id="5278628322769654561"> Smart Queue • <custom_emoji id="5346334981792734939"> Powerful Playback
-<custom_emoji id="5861955787181525936"> Group Friendly • <custom_emoji id="5886268068035827289"> 24/7 Music
+<tg-emoji emoji-id="6170427231802757303">⚡</tg-emoji> Fast • <tg-emoji emoji-id="5352865784508980799">🎶</tg-emoji> High Quality Audio
+<tg-emoji emoji-id="5278628322769654561">🧠</tg-emoji> Smart Queue • <tg-emoji emoji-id="5346334981792734939">🔥</tg-emoji> Powerful Playback
+<tg-emoji emoji-id="5861955787181525936">👥</tg-emoji> Group Friendly • <tg-emoji emoji-id="5886268068035827289">🎧</tg-emoji> 24/7 Music
 
 ━━━━━━━━━━━━━━
 
-<custom_emoji id="5226810560250676186"> Your Profile
-<custom_emoji id="6044337806719849057"> User: {mention}
-<custom_emoji id="5994504293321805232"> ID: {user_id}
+<tg-emoji emoji-id="5226810560250676186">👤</tg-emoji> Your Profile
+<tg-emoji emoji-id="6044337806719849057">❤️‍🔥</tg-emoji> User: {mention}
+<tg-emoji emoji-id="5994504293321805232">🩵</tg-emoji> ID: {user_id}
 
 Use /help to view all available commands.
 """
@@ -68,5 +71,6 @@ Use /help to view all available commands.
     await message.reply_photo(
         photo=START_IMAGE,
         caption=caption,
+        parse_mode=ParseMode.HTML,
         reply_markup=buttons,
     )
