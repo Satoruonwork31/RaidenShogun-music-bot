@@ -18,6 +18,7 @@ PLUGINS = [
     "ban",
     "unban",
     "id",
+    "welcome",
 ]
 
 def load_plugins():
