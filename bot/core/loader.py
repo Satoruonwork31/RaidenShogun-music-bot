@@ -15,6 +15,7 @@ PLUGINS = [
     "skip",
     "stop",
     "toss",
+    "ban",
 ]
 
 def load_plugins():
