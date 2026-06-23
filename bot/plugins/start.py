@@ -13,7 +13,7 @@ async def start_command(client, message):
     user_id = user.id
 
     caption = f"""
-✦  WELCOME TO RAIDEN SHOGUN <tg-emoji emoji-id="5994721794760642534">🎵</tg-emoji>
+✦  𝑾𝑬𝑳𝑪𝑶𝑴𝑬 𝑻𝑶 𝑹𝑨𝑰𝑫𝑬𝑵 𝑺𝑯𝑶𝑮𝑼𝑵 <tg-emoji emoji-id="5994721794760642534">🎵</tg-emoji>
 
 Hey {mention}!
 I'm Raiden Shogun, your premium music companion for Telegram Voice Chats.
