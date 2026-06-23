@@ -21,33 +21,45 @@ from PIL import Image, ImageDraw, ImageFont
 
 BANNER_URL = "https://i.ibb.co/NgL0V3hK/bdef780de3ae.jpg"
 BANNER_CACHE = "/tmp/raiden_banner.jpg"
+DEFAULT_AVATAR_URL = "https://i.ibb.co/NdrW3Th2/5fd3624c12fa.jpg"
+DEFAULT_AVATAR_CACHE = "/tmp/raiden_default_avatar.jpg"
 
 # Layout for the banner (735x420).
-PFP_CENTER = (170, 210)
+PFP_CENTER = (170, 200)
 PFP_RADIUS = 140
-NAME_X = 350
-NAME_Y_CENTER = 210
-NAME_MAX_WIDTH = 360  # banner_w(735) - NAME_X(350) - margin(25)
+BANNER_W = 735
+BANNER_H = 420
+# Name is drawn centered along the banner's lower portion.
+NAME_X_CENTER = BANNER_W // 2
+NAME_Y_CENTER = 370
+NAME_MAX_WIDTH = BANNER_W - 60
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 NAME_FONT_SIZE = 44
 NAME_FONT_MIN_SIZE = 22
 
 
-async def _fetch_banner() -> Image.Image:
-    if not os.path.exists(BANNER_CACHE) or os.path.getsize(BANNER_CACHE) == 0:
+async def _fetch_remote(url: str, cache_path: str) -> Image.Image:
+    if not os.path.exists(cache_path) or os.path.getsize(cache_path) == 0:
         async with aiohttp.ClientSession() as s:
-            async with s.get(BANNER_URL) as r:
+            async with s.get(url) as r:
                 data = await r.read()
-        with open(BANNER_CACHE, "wb") as f:
+        with open(cache_path, "wb") as f:
             f.write(data)
-    return Image.open(BANNER_CACHE).convert("RGBA")
+    return Image.open(cache_path).convert("RGBA")
+
+
+async def _fetch_banner() -> Image.Image:
+    return await _fetch_remote(BANNER_URL, BANNER_CACHE)
+
+
+async def _fetch_default_avatar() -> Image.Image:
+    return await _fetch_remote(DEFAULT_AVATAR_URL, DEFAULT_AVATAR_CACHE)
 
 
 def _initial_avatar(name: str, user_id: int, size: int) -> Image.Image:
-    """Generate a colored circle with the user's initial — used when no pfp."""
+    """Fallback used only if the remote default avatar fails to download."""
     initial = (name.strip() or "?")[0].upper()
-    # Deterministic hue from user id so the same user always gets the same color.
     hue = (hashlib.md5(str(user_id).encode()).digest()[0]) / 255.0
     r, g, b = colorsys.hsv_to_rgb(hue, 0.6, 0.85)
     bg = (int(r * 255), int(g * 255), int(b * 255), 255)
@@ -130,18 +142,20 @@ def _compose(
     draw = ImageDraw.Draw(canvas)
     font = _fit_font(draw, display_name, NAME_MAX_WIDTH)
     bbox = draw.textbbox((0, 0), display_name, font=font)
+    text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
+    text_x = NAME_X_CENTER - text_w // 2 - bbox[0]
     text_y = NAME_Y_CENTER - text_h // 2 - bbox[1]
 
     # Soft shadow so the name reads on light or dark banners.
     shadow_off = 2
     draw.text(
-        (NAME_X + shadow_off, text_y + shadow_off),
+        (text_x + shadow_off, text_y + shadow_off),
         display_name,
         fill=(0, 0, 0, 180),
         font=font,
     )
-    draw.text((NAME_X, text_y), display_name, fill=(255, 255, 255, 255), font=font)
+    draw.text((text_x, text_y), display_name, fill=(255, 255, 255, 255), font=font)
 
     out = io.BytesIO()
     canvas.convert("RGB").save(out, format="JPEG", quality=90)
@@ -160,9 +174,15 @@ async def render_welcome_card(
         try:
             avatar = Image.open(avatar_path)
         except Exception:
-            avatar = _initial_avatar(display_name, user_id, PFP_RADIUS * 2)
+            avatar = None
     else:
-        avatar = _initial_avatar(display_name, user_id, PFP_RADIUS * 2)
+        avatar = None
+
+    if avatar is None:
+        try:
+            avatar = await _fetch_default_avatar()
+        except Exception:
+            avatar = _initial_avatar(display_name, user_id, PFP_RADIUS * 2)
 
     data = await asyncio.to_thread(_compose, banner, avatar, display_name)
     bio = io.BytesIO(data)
