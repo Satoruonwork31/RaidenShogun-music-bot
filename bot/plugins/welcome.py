@@ -1,6 +1,8 @@
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 
+from bot.utils.greetings import is_enabled
+
 WELCOME_TEMPLATE = (
     '<tg-emoji emoji-id="5460858729962421671">👋</tg-emoji> Welcome, {first_name}!\n\n'
     "━━━━━━━━━━━━━━━\n"
@@ -16,6 +18,8 @@ WELCOME_TEMPLATE = (
 
 @Client.on_message(filters.new_chat_members & filters.group)
 async def welcome_new_members(client, message):
+    if not is_enabled(message.chat.id):
+        return
     for user in message.new_chat_members:
         if user.is_bot:
             continue
