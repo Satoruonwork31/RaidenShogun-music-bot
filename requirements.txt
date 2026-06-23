@@ -3,3 +3,5 @@ py-tgcalls
 tgcrypto
 python-dotenv
 yt-dlp
+youtube-search-python
+aiohttp
