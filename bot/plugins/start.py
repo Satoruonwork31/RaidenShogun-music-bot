@@ -15,14 +15,15 @@ async def start_command(client, message):
 Hey {mention}!
 I'm Raiden Shogun, your premium music companion for Telegram Voice Chats.
 
-<custom_emoji id="6170427231802757303"> Fast • <custom_emoji id="5352865784508980799"> High Quality Audio <custom_emoji id="5278628322769654561"> Smart Queue • <custom_emoji id="5206181776493402669"> Powerful Playback
+<custom_emoji id="6170427231802757303"> Fast • <custom_emoji id="5352865784508980799"> High Quality Audio
+<custom_emoji id="5278628322769654561"> Smart Queue • <custom_emoji id="5346334981792734939"> Powerful Playback
 <custom_emoji id="5861955787181525936"> Group Friendly • <custom_emoji id="5886268068035827289"> 24/7 Music
 
 ━━━━━━━━━━━━━━
 
 <custom_emoji id="5226810560250676186"> Your Profile
 <custom_emoji id="6044337806719849057"> User: {mention}
-<custom_emoji id="5217467262625140231"> ID: {user_id}
+<custom_emoji id="5994504293321805232"> ID: {user_id}
 
 Use /help to view all available commands.
 """
