@@ -20,4 +20,4 @@ def get_audio_stream(url):
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        return info["url"]
+        return info.get("url") or info["formats"][-1]["url"]
