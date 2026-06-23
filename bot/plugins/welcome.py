@@ -4,6 +4,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ParseMode
 
 from bot.utils.greetings import is_enabled
+from bot.utils.leave_messages import pick as pick_leave_message
 from bot.utils.welcome_image import render_welcome_card
 
 WELCOME_TEMPLATE = (
@@ -72,6 +73,31 @@ async def welcome_new_members(client, message):
 
 _JOIN_FROM = (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
 _JOIN_TO = (ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED)
+_LEAVE_FROM = (ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED, ChatMemberStatus.ADMINISTRATOR)
+_LEAVE_TO = (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
+
+
+def _mention(user) -> str:
+    first_name = user.first_name or "Someone"
+    last_name = user.last_name or ""
+    full_name = (first_name + " " + last_name).strip() or "Someone"
+    return f'<a href="tg://user?id={user.id}">{full_name}</a>'
+
+
+async def _send_leave(client, chat_id: int, user) -> None:
+    template = pick_leave_message(chat_id)
+    text = template.format(name=_mention(user))
+    await client.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+
+
+@Client.on_message(filters.left_chat_member & filters.group)
+async def leave_legacy(client, message):
+    if not is_enabled(message.chat.id):
+        return
+    user = message.left_chat_member
+    if not user or user.is_bot:
+        return
+    await _send_leave(client, message.chat.id, user)
 
 
 @Client.on_chat_member_updated()
@@ -88,3 +114,6 @@ async def welcome_via_chat_member(client, chat_member_updated):
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
         await _send_card(client, chat_member_updated.chat.id, new_member.user)
+        return
+    if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
+        await _send_leave(client, chat_member_updated.chat.id, new_member.user)

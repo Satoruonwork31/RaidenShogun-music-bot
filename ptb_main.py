@@ -526,8 +526,38 @@ async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _send_welcome(context, update.effective_chat.id, user)
 
 
+def _mention_html(user) -> str:
+    first_name = user.first_name or "Someone"
+    last_name = user.last_name or ""
+    full_name = (first_name + " " + last_name).strip() or "Someone"
+    return f'<a href="tg://user?id={user.id}">{full_name}</a>'
+
+
+async def _send_leave_message(context, chat_id: int, user) -> None:
+    from bot.utils.leave_messages import pick as pick_leave_message
+    template = pick_leave_message(chat_id)
+    text = template.format(name=_mention_html(user))
+    await context.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode=ParseMode.HTML
+    )
+
+
+async def leave_legacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Legacy path: someone left via service message left_chat_member."""
+    msg = update.message
+    if not msg or not msg.left_chat_member:
+        return
+    from bot.utils.greetings import is_enabled
+    if not is_enabled(update.effective_chat.id):
+        return
+    user = msg.left_chat_member
+    if user.is_bot:
+        return
+    await _send_leave_message(context, update.effective_chat.id, user)
+
+
 async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Modern path: supergroups deliver joins via chat_member updates."""
+    """Modern path: supergroups deliver joins AND leaves via chat_member updates."""
     cm = update.chat_member
     if cm is None or cm.new_chat_member is None or cm.new_chat_member.user is None:
         return
@@ -536,11 +566,19 @@ async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     old_status = cm.old_chat_member.status if cm.old_chat_member else "left"
     new_status = cm.new_chat_member.status
+
+    from bot.utils.greetings import is_enabled
+
     if old_status in ("left", "kicked") and new_status in ("member", "restricted"):
-        from bot.utils.greetings import is_enabled
         if not is_enabled(update.effective_chat.id):
             return
         await _send_welcome(context, update.effective_chat.id, user)
+        return
+
+    if old_status in ("member", "restricted", "administrator") and new_status in ("left", "kicked"):
+        if not is_enabled(update.effective_chat.id):
+            return
+        await _send_leave_message(context, update.effective_chat.id, user)
 
 
 async def greetings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -754,6 +792,9 @@ def main() -> None:
     app.add_handler(CommandHandler("greetings", greetings_cmd))
     app.add_handler(
         MessageHandler(tg_filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_members)
+    )
+    app.add_handler(
+        MessageHandler(tg_filters.StatusUpdate.LEFT_CHAT_MEMBER, leave_legacy)
     )
     app.add_handler(
         ChatMemberHandler(welcome_chat_member, ChatMemberHandler.CHAT_MEMBER)
