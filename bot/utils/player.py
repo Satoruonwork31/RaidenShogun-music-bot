@@ -3,12 +3,15 @@ from yt_dlp import YoutubeDL
 
 def search_youtube(query):
     ydl_opts = {
-        "format": "bestaudio",
-        "quiet": True,
-        "noplaylist": True,
-        "extract_flat": "in_playlist",
-        "default_search": "ytsearch1",
+    "format": "bestaudio/best",
+    "quiet": True,
+    "noplaylist": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android"]
+        }
     }
+}
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(query, download=False)
