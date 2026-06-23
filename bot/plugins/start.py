@@ -10,20 +10,19 @@ async def start_command(client, message):
     user = message.from_user
 
     caption = f"""
-✦ 𝑾𝑬𝑳𝑪𝑶𝑴𝑬 𝑻𝑶 𝑹𝑨𝑰𝑫𝑬𝑵 𝑺𝑯𝑶𝑮𝑼𝑵 🎵
+✦  WELCOME TO RAIDEN SHOGUN <custom_emoji id="5994721794760642534"> 
 
-Hey {user.mention}!
-I'm Raiden Shogun, your music companion for Telegram voice chats.
+Hey {mention}!
+I'm Raiden Shogun, your premium music companion for Telegram Voice Chats.
 
-────────────────────────
-⚡ Fast • 🎶 High Quality Audio
-🧠 Smart Queue • 🔥 Powerful Playback
-👥 Group Friendly • 🎧 24/7 Music
-────────────────────────
+<custom_emoji id="6170427231802757303"> Fast • <custom_emoji id="5352865784508980799"> High Quality Audio <custom_emoji id="5278628322769654561"> Smart Queue • <custom_emoji id="5206181776493402669"> Powerful Playback
+<custom_emoji id="5861955787181525936"> Group Friendly • <custom_emoji id="5886268068035827289"> 24/7 Music
 
-👤 Your Profile
-❤️‍🔥 User: {user.mention}
-🩵 ID: {user.id}
+━━━━━━━━━━━━━━
+
+<custom_emoji id="5226810560250676186"> Your Profile
+<custom_emoji id="6044337806719849057"> User: {mention}
+<custom_emoji id="5217467262625140231"> ID: {user_id}
 
 Use /help to view all available commands.
 """
