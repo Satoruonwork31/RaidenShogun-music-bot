@@ -1,14 +1,24 @@
 from yt_dlp import YoutubeDL
-from youtubesearchpython import VideosSearch
 
 
 def search_youtube(query):
-    results = VideosSearch(query, limit=1).result()
+    ydl_opts = {
+        "format": "bestaudio",
+        "quiet": True,
+        "noplaylist": True,
+        "extract_flat": "in_playlist",
+        "default_search": "ytsearch1",
+    }
 
-    if not results["result"]:
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+
+    entries = info.get("entries") if isinstance(info, dict) else None
+    if not entries:
         return None
 
-    return results["result"][0]["link"]
+    entry = entries[0]
+    return entry.get("webpage_url") or entry.get("url")
 
 
 def get_audio_stream(url):
@@ -20,4 +30,13 @@ def get_audio_stream(url):
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        return info.get("url") or info["formats"][-1]["url"]
+
+    if not info:
+        return None
+
+    stream = info.get("url")
+    if stream:
+        return stream
+
+    formats = info.get("formats") or []
+    return formats[-1]["url"] if formats else None
