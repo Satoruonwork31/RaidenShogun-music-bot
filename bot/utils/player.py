@@ -16,10 +16,14 @@ from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
-# Optional outbound proxy for yt-dlp. Set YT_DLP_PROXY=http://host:port (or
-# socks5://) in .env to rotate the bot's outbound IP — useful when YouTube
-# rate-limits the VPS or trips the bot-wall. Leave empty for no proxy.
-YT_DLP_PROXY = os.getenv("YT_DLP_PROXY", "").strip()
+# Outbound proxy for yt-dlp specifically. If unset, fall back to the
+# global PROXY_URL so a single var configures both Telegram and yt-dlp.
+# Either accepts http://host:port, socks5://host:port, with optional
+# user:pass@.
+YT_DLP_PROXY = (
+    os.getenv("YT_DLP_PROXY", "").strip()
+    or os.getenv("PROXY_URL", "").strip()
+)
 
 # Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
 # - `web` is the only client that fully honours cookies AND can solve the
