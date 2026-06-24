@@ -24,6 +24,24 @@ from bot.utils import chats
 logger = logging.getLogger("RaidenShogun.discover")
 
 
+async def _resolve_bot_for_userbot(bot_username: str | None, bot_id: int):
+    """Make sure the userbot's peer cache knows the bot before we call
+    methods that take a peer. On a fresh session the userbot may have
+    never seen the bot, and Telegram returns PEER_ID_INVALID until the
+    peer is resolved (usually by @username).
+    """
+    if bot_username:
+        try:
+            return await userbot.get_users(bot_username)
+        except Exception as exc:
+            logger.info("backfill: resolve by username failed: %s", exc)
+    try:
+        return await userbot.get_users(bot_id)
+    except Exception as exc:
+        logger.warning("backfill: resolve by id failed: %s", exc)
+        return None
+
+
 async def backfill_common_chats() -> int:
     """Ask the userbot for chats it shares with the bot and add each to the
     registry. Returns the number of NEW chats added.
@@ -34,14 +52,19 @@ async def backfill_common_chats() -> int:
         logger.warning("backfill: app.get_me failed: %s", exc)
         return 0
 
-    added = 0
-    seen = 0
+    # Prime the userbot's peer cache so get_common_chats won't trip on
+    # PEER_ID_INVALID.
+    resolved = await _resolve_bot_for_userbot(bot_me.username, bot_me.id)
+    target = resolved.id if resolved is not None else bot_me.id
+
     try:
-        common = await userbot.get_common_chats(bot_me.id)
+        common = await userbot.get_common_chats(target)
     except Exception as exc:
         logger.warning("backfill: userbot.get_common_chats failed: %s", exc)
         return 0
 
+    added = 0
+    seen = 0
     for chat in common or []:
         seen += 1
         chat_id = getattr(chat, "id", None)
