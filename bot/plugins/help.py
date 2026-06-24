@@ -3,13 +3,13 @@ from pyrogram.enums import ParseMode
 
 HELP_IMAGE = "https://i.ibb.co/0yjy0Cj0/0ad5a76f9731.jpg"
 
-# Each <tg-emoji emoji-id="..."> needs a fallback emoji INSIDE and a closing
-# tag — Telegram renders the premium glyph for premium users and the fallback
-# for everyone else. The bare `<custom_emoji id="...">` syntax used previously
-# isn't a real Telegram tag and just gets stripped.
+# Pyrofork's HTML parser recognises ONLY <emoji id="..."> for custom emoji,
+# not the <tg-emoji emoji-id="..."> tag accepted by Telegram's HTTP Bot API.
+# Using the wrong tag silently strips the entity, leaving just the fallback.
+# The format is: <emoji id="ID">FALLBACK_EMOJI</emoji>
 HELP_CAPTION = (
-    '<tg-emoji emoji-id="5033104253846029290">🎵</tg-emoji> <b>RaidenShogun Music Bot Commands</b>\n\n'
-    '<tg-emoji emoji-id="5334653529741076580">🎶</tg-emoji> <b>Music</b>\n'
+    '<emoji id="5033104253846029290">🎵</emoji> <b>RaidenShogun Music Bot Commands</b>\n\n'
+    '<emoji id="5334653529741076580">🎶</emoji> <b>Music</b>\n'
     "• /play - Play a song\n"
     "• /vplay - Play a video in voice chat\n"
     "• /song - Search and download a song\n"
@@ -20,20 +20,21 @@ HELP_CAPTION = (
     "• /vskip - Skip the current video\n"
     "• /stop - Stop playback\n"
     "• /queue - Show the music queue\n\n"
-    '<tg-emoji emoji-id="4958900559139570572">🛡</tg-emoji> <b>Moderation</b>\n'
+    '<emoji id="4958900559139570572">🛡</emoji> <b>Moderation</b>\n'
     "• /ban - Ban a user\n"
     "• /unban - Unban a user\n\n"
-    '<tg-emoji emoji-id="5816875690183631180">👋</tg-emoji> <b>Welcome &amp; Greetings</b>\n'
+    '<emoji id="5816875690183631180">👋</emoji> <b>Welcome &amp; Greetings</b>\n'
     "• /greetings on|off - Toggle welcome &amp; farewell messages\n\n"
-    '<tg-emoji emoji-id="5972061723400605896">🎲</tg-emoji> <b>Fun</b>\n'
+    '<emoji id="5972061723400605896">🎲</emoji> <b>Fun</b>\n'
     "• /toss - Toss a coin\n\n"
-    '<tg-emoji emoji-id="5350427505805238170">🆔</tg-emoji> <b>Information</b>\n'
+    '<emoji id="5350427505805238170">🆔</emoji> <b>Information</b>\n'
     "• /id - Get user, group, or chat ID\n\n"
-    '<tg-emoji emoji-id="5341715473882955310">⚙️</tg-emoji> <b>General</b>\n'
+    '<emoji id="5341715473882955310">⚙️</emoji> <b>General</b>\n'
     "• /start - Show the welcome message\n"
     "• /help - Show this help menu\n"
     "• /ping - Check if the bot is online\n"
-    "• /broadcast - (owner only) push a message to every chat"
+    "• /broadcast - (owner only) push a message to every chat\n"
+    "• /seeddm - (owner only) add user IDs to the broadcast DM list"
 )
 
 

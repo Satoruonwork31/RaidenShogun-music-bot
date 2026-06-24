@@ -8,15 +8,16 @@ from bot.utils.leave_messages import pick as pick_leave_message
 from bot.utils.welcome_image import render_welcome_card
 
 WELCOME_TEMPLATE = (
-    '<tg-emoji emoji-id="5460858729962421671">👋</tg-emoji> Welcome, {first_name}!\n\n'
+    # Pyrofork's HTML parser uses <emoji id="..."> not <tg-emoji emoji-id="...">.
+    '<emoji id="5460858729962421671">👋</emoji> Welcome, {first_name}!\n\n'
     "━━━━━━━━━━━━━━━\n"
-    '<tg-emoji emoji-id="5249053508681883137">👤</tg-emoji> Name - {full_name}\n'
-    '<tg-emoji emoji-id="5818885490065017876">🆔</tg-emoji> User ID - <code>{user_id}</code>\n'
-    '<tg-emoji emoji-id="6032675574646836901">📛</tg-emoji> Username - {username}\n'
+    '<emoji id="5249053508681883137">👤</emoji> Name - {full_name}\n'
+    '<emoji id="5818885490065017876">🆔</emoji> User ID - <code>{user_id}</code>\n'
+    '<emoji id="6032675574646836901">📛</emoji> Username - {username}\n'
     "━━━━━━━━━━━━━━━\n\n"
-    '<tg-emoji emoji-id="5969733271305588971">✨</tg-emoji> Your arrival has been successfully registered.\n\n'
-    '<tg-emoji emoji-id="6269566961168944843">🌐</tg-emoji> Explore, connect, and enjoy everything waiting for you.\n\n'
-    '<tg-emoji emoji-id="5970041332129863164">💫</tg-emoji> We hope you have an amazing experience and a wonderful time ahead!'
+    '<emoji id="5969733271305588971">✨</emoji> Your arrival has been successfully registered.\n\n'
+    '<emoji id="6269566961168944843">🌐</emoji> Explore, connect, and enjoy everything waiting for you.\n\n'
+    '<emoji id="5970041332129863164">💫</emoji> We hope you have an amazing experience and a wonderful time ahead!'
 )
 
 

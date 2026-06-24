@@ -12,21 +12,22 @@ async def start_command(client, message):
     mention = user.mention
     user_id = user.id
 
+    # Pyrofork's HTML parser uses <emoji id="..."> not <tg-emoji emoji-id="...">.
     caption = f"""
-✦  𝑾𝑬𝑳𝑪𝑶𝑴𝑬 𝑻𝑶 𝑹𝑨𝑰𝑫𝑬𝑵 𝑺𝑯𝑶𝑮𝑼𝑵 <tg-emoji emoji-id="5994721794760642534">🎵</tg-emoji>
+✦  𝑾𝑬𝑳𝑪𝑶𝑴𝑬 𝑻𝑶 𝑹𝑨𝑰𝑫𝑬𝑵 𝑺𝑯𝑶𝑮𝑼𝑵 <emoji id="5994721794760642534">🎵</emoji>
 
 Hey {mention}!
 I'm Raiden Shogun, your premium music companion for Telegram Voice Chats.
 
-<tg-emoji emoji-id="6170427231802757303">⚡</tg-emoji> Fast • <tg-emoji emoji-id="5352865784508980799">🎶</tg-emoji> High Quality Audio
-<tg-emoji emoji-id="5278628322769654561">🧠</tg-emoji> Smart Queue • <tg-emoji emoji-id="5346334981792734939">🔥</tg-emoji> Powerful Playback
-<tg-emoji emoji-id="5861955787181525936">👥</tg-emoji> Group Friendly • <tg-emoji emoji-id="5886268068035827289">🎧</tg-emoji> 24/7 Music
+<emoji id="6170427231802757303">⚡</emoji> Fast • <emoji id="5352865784508980799">🎶</emoji> High Quality Audio
+<emoji id="5278628322769654561">🧠</emoji> Smart Queue • <emoji id="5346334981792734939">🔥</emoji> Powerful Playback
+<emoji id="5861955787181525936">👥</emoji> Group Friendly • <emoji id="5886268068035827289">🎧</emoji> 24/7 Music
 
 ━━━━━━━━━━━━━━
 
-<tg-emoji emoji-id="5226810560250676186">👤</tg-emoji> Your Profile
-<tg-emoji emoji-id="6044337806719849057">❤️‍🔥</tg-emoji> User: {mention}
-<tg-emoji emoji-id="5994504293321805232">🩵</tg-emoji> ID: {user_id}
+<emoji id="5226810560250676186">👤</emoji> Your Profile
+<emoji id="6044337806719849057">❤️‍🔥</emoji> User: {mention}
+<emoji id="5994504293321805232">🩵</emoji> ID: {user_id}
 
 Use /help to view all available commands.
 """
