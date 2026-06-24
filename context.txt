@@ -1,0 +1,176 @@
+# RaidenShogun Music Bot — Context
+
+Last updated: 2026-06-24 (queue + real playback controls)
+
+## Project Overview
+
+A Telegram voice-chat music bot. Group members run /play and the bot's
+assistant userbot joins the voice chat and streams audio resolved from
+YouTube / Spotify / Resso / SoundCloud via yt-dlp + py-tgcalls + ffmpeg.
+
+There is a second feature set bolted on around the music core: welcome
+cards (image-composited), savage leave messages with per-chat anti-repeat,
+admin /ban /unban, /id resolver, /toss, /greetings on|off toggle.
+
+## Repository Structure
+
+- main.py                       — process entry point. Calls bot.start.start_bot().
+- bot/start.py                  — async runner: loads plugins, starts userbot,
+                                  starts PyTgCalls, starts bot, idle().
+- bot/client.py                 — Pyrogram Client `app` (bot) and `userbot` (MTProto session).
+- bot/config.py                 — loads API_ID/HASH/BOT_TOKEN/STRING_SESSION from .env.
+- bot/core/loader.py            — imports every bot/plugins/<x>.py at startup.
+- bot/core/music.py             — DEAD FILE. Just `from pytgcalls import PyTgCalls`. Not used.
+- bot/utils/music.py            — the real `music = PyTgCalls(userbot)` instance.
+- bot/utils/player.py           — yt-dlp wrapper with multi-client fallback chain
+                                  (tv_embedded → mediaconnect_frontend → android → web → ios).
+                                  Supports COOKIES_FILE env var.
+- bot/utils/resolver.py         — turns text/URL into (audio_stream_url, label).
+                                  Routes YT/SC to yt-dlp, Spotify/Resso to API then YT search.
+- bot/utils/queue.py            — Per-chat playback queue. `Track` dataclass +
+                                  now_playing / upcoming / enqueue / pop_next /
+                                  clear / is_active / set_current. Lock-guarded.
+- bot/utils/playback.py         — Orchestrator. `play_track(chat_id, track)`
+                                  primes userbot peer cache, builds MediaStream
+                                  (audio or video), calls music.play. Registers
+                                  @music.on_update() to auto-advance queue on
+                                  StreamEnded.
+- bot/utils/spotify.py          — Spotify API (client-credentials) lookup.
+- bot/utils/resso.py            — Resso share-page scraper.
+- bot/utils/youtube.py          — older / alt YT helper (need to confirm vs player.py).
+- bot/utils/welcome_image.py    — PIL banner+avatar compositor for welcome cards.
+- bot/utils/leave_messages.py   — list of leave-line templates + per-chat ring buffer.
+- bot/utils/greetings.py        — per-chat on/off flag persisted to greetings.json.
+- bot/plugins/*.py              — one file per /command. See "Known Bugs" — most music
+                                  plugins are stubs.
+- ptb_main.py                   — PARALLEL 830-line python-telegram-bot implementation
+                                  (NOT what main.py runs, NOT in requirements.txt).
+                                  Has real handlers for play/pause/skip/stop/etc.
+- scripts/install.sh            — VPS one-shot: apt deps + venv + systemd unit pointing
+                                  at main.py. Service name: raiden-musicbot.
+- requirements.txt              — pyrofork, py-tgcalls, tgcrypto, python-dotenv, yt-dlp,
+                                  aiohttp, Pillow. NO PIN. NO python-telegram-bot.
+- .env                          — committed to git history (see Known Bugs / CRITICAL #1).
+
+## Current Features (what actually works in the deployed pyrogram path)
+
+- /start, /help, /ping                  — static replies + buttons.
+- /id                                   — resolve user via reply / @username / id / text-mention.
+                                          Uses userbot to look up @usernames bot API can't.
+- /ban, /unban                          — admin-gated, supports reply / @username / id /
+                                          text-mention. Real chat actions via app.ban_chat_member.
+- /toss                                 — coin flip.
+- /greetings on|off                     — admin toggle persisted to greetings.json.
+- Welcome card on member join           — composited banner+avatar+name+caption.
+- Savage farewell on member leave       — per-chat anti-repeat ring buffer.
+- Both legacy `new_chat_members` and modern `chat_member_updated` paths.
+- /play <text|link>                     — resolves and starts a stream via PyTgCalls.
+                                          Also accepts replied audio/voice/video uploads.
+
+## Known Bugs
+
+See AUDIT_REPORT.md for the prioritized list and severity. High-level:
+
+- CRITICAL: Telegram credentials committed in .env to a public-looking GitHub
+  remote. BOT_TOKEN, API_HASH, STRING_SESSION must be considered compromised.
+- ~~CRITICAL: /skip /pause /resume /stop /queue /vplay /vskip are placeholder
+  handlers~~ — FIXED 2026-06-24, see Fix History.
+  /song /video are still placeholders (download-and-send is separate work).
+- ~~CRITICAL: No queue logic~~ — FIXED 2026-06-24, see Fix History.
+- HIGH: requirements.txt is fully unpinned — any rebuild may break.
+- HIGH: ptb_main.py is a parallel implementation that needs a decision
+  (consolidate or delete).
+- MEDIUM: No exception handler around bot/start.py:_run — process dies silently.
+- MEDIUM: Userbot is not auto-invited to voice chats; depends on it already
+  being in the group (the ptb_main.py path has _ensure_userbot_in_chat that
+  handles this; the pyrogram path does not).
+- MEDIUM: bot/core/music.py is a dead file.
+- MEDIUM: bot/utils/queue.py is dead code.
+
+## Fix History
+
+### 2026-06-24 — Real playback controls + per-chat queue
+
+Replaced the placeholder handlers for /skip /pause /resume /stop /end /queue
+/vplay /cplay /vskip with real PyTgCalls calls and wired them through a new
+per-chat queue.
+
+Files added:
+- bot/utils/playback.py (orchestrator + stream-end auto-advance handler)
+
+Files rewritten:
+- bot/utils/queue.py (was a single `QUEUE = {}`, now a real per-chat queue
+  with Track dataclass, current+upcoming state, threadsafe accessors)
+- bot/plugins/play.py (enqueues when something is already playing instead
+  of clobbering; routes both /play and /vplay through one helper)
+- bot/plugins/pause.py / resume.py / stop.py / skip.py / queue.py /
+  vplay.py / vskip.py (all now real handlers)
+
+Files edited:
+- bot/utils/player.py (added get_video_stream, get_title, generalised
+  _opts_for to take video=True)
+- bot/utils/resolver.py (resolve() now accepts video=True)
+- bot/start.py (imports bot.utils.playback so the stream-end handler is
+  registered before music.start())
+
+Behaviour notes:
+- /play and /vplay share one queue per chat — there's only one VC per
+  group, so audio/video must share a timeline.
+- /vskip is the same code path as /skip (aliased).
+- /stop also accepts /end (filters.command(['stop','end'])).
+- /vplay also accepts /cplay (group/owner conventions).
+- Stream-end auto-advance: when py-tgcalls fires StreamEnded (any of
+  StreamAudioEnded / StreamVideoEnded / StreamEnded — name varies by
+  version), playback module pops next track or leaves the call.
+- On any auto-advance failure the next track is tried once, then we give up
+  rather than thrash.
+
+Verification performed:
+- python3 -m py_compile on every changed file (PASS).
+- Static cross-reference: every symbol imported across files exists as a
+  top-level export in its source module (PASS).
+- Unit-tested bot/utils/queue.py end-to-end (Track lifecycle, enqueue,
+  pop_next, clear, is_active) — PASS.
+
+Verification NOT yet performed:
+- Live Telegram smoke test (no network / no safe credentials in this
+  sandbox). The leaked credentials in CRIT-1 must be rotated before any
+  real-world run.
+
+## Testing History
+
+- 2026-06-24: Static read of all bot/*.py and ptb_main.py. No runtime tests.
+  Cannot actually start the bot from this sandbox — no network to Telegram,
+  and starting with the leaked credentials would itself be unsafe.
+
+## Deployment Notes
+
+- Target: Debian/Ubuntu VPS, root or sudo.
+- Install: `sudo bash scripts/install.sh` (idempotent).
+- Runtime: systemd unit `raiden-musicbot.service`, runs main.py under .venv.
+- Required env: API_ID, API_HASH, BOT_TOKEN, STRING_SESSION.
+- Optional env: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, COOKIES_FILE,
+  GREETINGS_FILE.
+- System deps: ffmpeg (used by py-tgcalls), python3.10+, build-essential.
+
+## Future Tasks
+
+1. Rotate the leaked credentials and purge .env from git history.
+2. Decide: keep bot/* pyrogram path or pivot to ptb_main.py.
+3. Implement real /skip /pause /resume /stop /queue handlers (whichever path).
+4. Implement queue data structure: per-chat list, on stream-end pop+play.
+5. Wire `_ensure_userbot_in_chat` equivalent into the pyrogram /play path.
+6. Pin requirements.txt to known-working versions.
+7. Delete dead code: bot/core/music.py, bot/utils/queue.py if not wired up,
+   either ptb_main.py or bot/* after path decision.
+8. Add a startup smoke test (importable; doesn't need real Telegram).
+
+## Session Log
+
+- 2026-06-24: First pass. Read main.py, bot/start.py, bot/client.py, bot/config.py,
+  bot/core/{loader,music}.py, bot/utils/{music,player,resolver,queue,greetings,
+  leave_messages}.py, every bot/plugins/*.py, ptb_main.py header, scripts/install.sh.
+  Identified credential leak, placeholder commands, dual-implementation problem.
+  Wrote context.txt and AUDIT_REPORT.md.
+- 2026-06-24: Implemented real playback controls + per-chat queue (see Fix
+  History). Static + unit verification only — no live Telegram run.

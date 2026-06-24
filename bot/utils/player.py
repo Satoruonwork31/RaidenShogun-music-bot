@@ -26,9 +26,13 @@ PLAYER_CLIENTS = [
 ]
 
 
-def _opts_for(client: str, extra=None) -> dict:
+def _opts_for(client: str, extra=None, *, video: bool = False) -> dict:
+    # YouTube serves muxed audio+video only up to 720p. Above that the streams
+    # are split and would need ffmpeg to remux on the fly, which py-tgcalls
+    # already does — but staying at 720p avoids surprises on low-CPU VPSes.
+    fmt = "best[height<=720]/best" if video else "bestaudio/best"
     opts = {
-        "format": "bestaudio/best",
+        "format": fmt,
         "quiet": True,
         "noplaylist": True,
         "no_warnings": True,
@@ -44,11 +48,11 @@ def _opts_for(client: str, extra=None) -> dict:
     return opts
 
 
-def _try_extract(url_or_query: str, extra: dict | None = None) -> dict | None:
+def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = False) -> dict | None:
     last_exc: Exception | None = None
     for client in PLAYER_CLIENTS:
         try:
-            with YoutubeDL(_opts_for(client, extra)) as ydl:
+            with YoutubeDL(_opts_for(client, extra, video=video)) as ydl:
                 info = ydl.extract_info(url_or_query, download=False)
             if info:
                 return info
@@ -102,8 +106,8 @@ def search_youtube(query, limit: int = 5):
     return urls if urls else None
 
 
-def get_audio_stream(url):
-    info = _try_extract(url)
+def _extract_stream(url: str, *, video: bool) -> str | None:
+    info = _try_extract(url, video=video)
     if not isinstance(info, dict):
         return None
     stream = info.get("url")
@@ -111,3 +115,26 @@ def get_audio_stream(url):
         return stream
     formats = info.get("formats") or []
     return formats[-1]["url"] if formats else None
+
+
+def get_audio_stream(url):
+    return _extract_stream(url, video=False)
+
+
+def get_video_stream(url):
+    return _extract_stream(url, video=True)
+
+
+def get_title(url: str) -> str | None:
+    """Best-effort fetch of the human-readable title for a URL.
+
+    Used to render `/queue` lines. Falls back to None on any error so callers
+    can substitute the raw query.
+    """
+    try:
+        info = _try_extract(url)
+    except Exception:
+        return None
+    if isinstance(info, dict):
+        return info.get("title")
+    return None

@@ -17,7 +17,11 @@ edit_text the status message instead of leaving it hanging.
 import asyncio
 import re
 
-from bot.utils.player import get_audio_stream, search_youtube
+from bot.utils.player import (
+    get_audio_stream,
+    get_video_stream,
+    search_youtube,
+)
 from bot.utils.resso import is_resso_url, resolve_resso
 from bot.utils.spotify import is_spotify_url, resolve_spotify
 
@@ -42,16 +46,18 @@ def _humanize_ytdlp_error(exc: Exception) -> str:
     return f"yt-dlp error: {exc}"
 
 
-async def resolve(query: str) -> tuple[str | None, str]:
+async def resolve(query: str, *, video: bool = False) -> tuple[str | None, str]:
     query = query.strip()
+    extractor = get_video_stream if video else get_audio_stream
 
     if _YT_RE.search(query) or _SC_RE.search(query):
         try:
-            stream = await asyncio.to_thread(get_audio_stream, query)
+            stream = await asyncio.to_thread(extractor, query)
         except Exception as exc:
             return None, _humanize_ytdlp_error(exc)
         if not stream:
-            return None, "Couldn't extract an audio stream for that link."
+            kind = "video" if video else "audio"
+            return None, f"Couldn't extract a {kind} stream for that link."
         return stream, query
 
     if is_spotify_url(query):
@@ -64,7 +70,7 @@ async def resolve(query: str) -> tuple[str | None, str]:
                 "Spotify lookup failed. Make sure SPOTIFY_CLIENT_ID and "
                 "SPOTIFY_CLIENT_SECRET are set in .env."
             )
-        return await _via_youtube_search(meta)
+        return await _via_youtube_search(meta, video=video)
 
     if is_resso_url(query):
         try:
@@ -73,12 +79,13 @@ async def resolve(query: str) -> tuple[str | None, str]:
             return None, f"Resso lookup failed: {exc}"
         if not meta:
             return None, "Couldn't read song info from that Resso link."
-        return await _via_youtube_search(meta)
+        return await _via_youtube_search(meta, video=video)
 
-    return await _via_youtube_search(query)
+    return await _via_youtube_search(query, video=video)
 
 
-async def _via_youtube_search(query: str) -> tuple[str | None, str]:
+async def _via_youtube_search(query: str, *, video: bool = False) -> tuple[str | None, str]:
+    extractor = get_video_stream if video else get_audio_stream
     try:
         results = await asyncio.to_thread(search_youtube, query)
     except Exception as exc:
@@ -92,10 +99,11 @@ async def _via_youtube_search(query: str) -> tuple[str | None, str]:
     last_err: str | None = None
     for url in results:
         try:
-            stream = await asyncio.to_thread(get_audio_stream, url)
+            stream = await asyncio.to_thread(extractor, url)
         except Exception as exc:
             last_err = _humanize_ytdlp_error(exc)
             continue
         if stream:
             return stream, query
-    return None, last_err or f"Couldn't extract audio for: {query}"
+    kind = "video" if video else "audio"
+    return None, last_err or f"Couldn't extract {kind} for: {query}"

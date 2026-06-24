@@ -2,12 +2,13 @@ import os
 
 from pyrogram import Client, filters
 from pyrogram.enums import ChatType
-from pytgcalls.types import AudioQuality, MediaStream
 
-from bot.utils.music import music
+from bot.utils import queue as q
+from bot.utils.playback import play_track
 from bot.utils.resolver import resolve
 
 DOWNLOAD_DIR = "/tmp/raiden_downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 def _replied_media(message):
@@ -33,11 +34,18 @@ def _replied_media(message):
     return None, None
 
 
-@Client.on_message(filters.command("play"))
-async def play_command(client, message):
+def _requester_name(message) -> str:
+    user = message.from_user
+    if not user:
+        return "someone"
+    return user.first_name or user.username or str(user.id)
+
+
+async def _do_play(client, message, *, is_video: bool):
+    label_cmd = "/vplay" if is_video else "/play"
     if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await message.reply_text(
-            "👥 The /play command only works in groups with an active voice chat."
+            f"👥 The {label_cmd} command only works in groups with an active voice chat."
         )
         return
 
@@ -45,22 +53,24 @@ async def play_command(client, message):
 
     if len(message.command) < 2 and not replied_media:
         await message.reply_text(
-            "🎵 Please provide a song name or link, or reply to an audio/video message with /play.\n\n"
+            f"🎵 Please provide a song name or link, or reply to an audio/video "
+            f"message with {label_cmd}.\n\n"
             "Supported sources:\n"
             "• YouTube (link or text search)\n"
             "• Spotify track link\n"
             "• Resso song link\n"
             "• SoundCloud track link\n"
-            "• Uploaded audio/voice/video (reply with /play)"
+            "• Uploaded audio/voice/video (reply with the command)"
         )
         return
 
     if replied_media:
         status = await message.reply_text(f"⬇️ Downloading {replied_label}...")
         try:
-            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
             stream_url = await message.reply_to_message.download(
-                file_name=os.path.join(DOWNLOAD_DIR, f"{replied_media.file_unique_id}_")
+                file_name=os.path.join(
+                    DOWNLOAD_DIR, f"{replied_media.file_unique_id}_"
+                )
             )
             info = replied_label
         except Exception as exc:
@@ -69,18 +79,36 @@ async def play_command(client, message):
     else:
         query = " ".join(message.command[1:])
         status = await message.reply_text(f"🔍 Resolving: {query}")
-        stream_url, info = await resolve(query)
+        stream_url, info = await resolve(query, video=is_video)
         if not stream_url:
             await status.edit_text(f"❌ {info}")
             return
 
-    try:
-        await music.play(
-            message.chat.id,
-            MediaStream(stream_url, audio_parameters=AudioQuality.HIGH),
+    track = q.Track(
+        stream_url=stream_url,
+        title=info,
+        requested_by=_requester_name(message),
+        is_video=is_video,
+    )
+
+    # If something is already playing in this chat, just enqueue.
+    if q.is_active(message.chat.id):
+        position = q.enqueue(message.chat.id, track)
+        await status.edit_text(
+            f"➕ Added to queue at position {position}: {info}"
         )
-    except Exception as exc:
-        await status.edit_text(f"❌ Playback failed: {exc}")
         return
 
-    await status.edit_text(f"🎵 Now Playing: {info}")
+    try:
+        await play_track(message.chat.id, track)
+    except Exception as exc:
+        await status.edit_text(f"❌ Playback failed: {type(exc).__name__}: {exc}")
+        return
+
+    icon = "🎬" if is_video else "🎵"
+    await status.edit_text(f"{icon} Now Playing: {info}")
+
+
+@Client.on_message(filters.command("play"))
+async def play_command(client, message):
+    await _do_play(client, message, is_video=False)
