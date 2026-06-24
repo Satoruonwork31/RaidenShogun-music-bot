@@ -33,6 +33,9 @@ def _opts_for(client: str, extra=None) -> dict:
         "noplaylist": True,
         "no_warnings": True,
         "extractor_args": {"youtube": {"player_client": [client]}},
+        # Auto-download signature solver from yt-dlp/ejs releases on first run.
+        # Required since YouTube enforces n-challenge + PO Tokens on server IPs.
+        "remote_components": ["ejs:github"],
     }
     if COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
