@@ -4,54 +4,53 @@ from pyrogram import idle
 
 from bot.client import app, userbot
 from bot.logger import logger
-from bot.utils.music import music
-# Importing playback registers the @music.on_update stream-end handler so
-# the queue auto-advances. Must happen before music.start().
-from bot.utils import playback  # noqa: F401
+from bot.utils import music as music_mod
+from bot.utils import playback as playback_mod
 
 
-def _rebind_dispatcher_loops() -> None:
-    """Repair every import-time loop capture in the stack.
+def _rebind_pyrofork_loops() -> None:
+    """Repair pyrofork's import-time loop capture.
 
-    Multiple libraries here call asyncio.get_event_loop() at module import
-    time and cache the result on self.loop. On Python 3.10+ that returns
-    a loop separate from the one asyncio.run() actually runs — so workers
-    schedule onto a dead loop, futures attach to the wrong loop, the whole
-    thing silently breaks. We re-point every captured reference at the
-    current running loop before any .start() call.
-
-    Affected:
-    - pyrofork's `Dispatcher` on each Client (handler-worker scheduling,
-      causes "command not responding").
-    - py-tgcalls' `PyTgCalls` instance (causes "RuntimeError: Future
-      attached to a different loop" the moment music.play tries to
-      coordinate JoinGroupCall internally).
+    Pyrofork's Dispatcher.__init__ calls asyncio.get_event_loop() at module
+    import time. On Python 3.10+ that returns a separate loop from the one
+    asyncio.run() creates at runtime — so handler-worker tasks get scheduled
+    on a dead loop and never execute. Pointing dispatcher.loop at the
+    current running loop before any client.start() call fixes this.
     """
     loop = asyncio.get_running_loop()
     for client in (app, userbot):
         client.dispatcher.loop = loop
-    music.loop = loop
 
 
 async def _run():
+    # Step 1 — fix pyrofork's loop capture so handlers fire.
+    _rebind_pyrofork_loops()
+
+    # Step 2 — construct PyTgCalls inside the running loop. This is the
+    # equivalent rebind for py-tgcalls; instead of patching every internal
+    # asyncio primitive (loop, ChatLock, Cache, NTgCalls callbacks) we just
+    # build the instance after the loop exists. Then register the
+    # stream-end auto-advance handler against it.
+    music_mod.init(userbot)
+    playback_mod.register_handlers()
+
     # Pyrofork loads bot/plugins/*.py automatically on app.start() because
-    # bot/client.py passes plugins=dict(root="bot.plugins"). The old manual
-    # load_plugins() call did nothing useful — kept around in
-    # bot/core/loader.py only for the PLUGINS list comment / reference.
-    _rebind_dispatcher_loops()
+    # bot/client.py passes plugins=dict(root="bot.plugins"). By the time
+    # plugin imports happen, music_mod.music is populated — plugins that
+    # do `from bot.utils.music import music` will name-bind the live
+    # instance correctly.
     logger.info("Starting RaidenShogun Music Bot")
     await userbot.start()
-    await music.start()
+    await music_mod.music.start()
     await app.start()
 
     # Backfill the /broadcast chat registry from the userbot's perspective.
-    # Bots can't enumerate their own dialogs, so on a fresh start the
-    # registry would only know chats that have sent a message since boot.
     from bot.utils.discover import backfill_common_chats
     try:
         await backfill_common_chats()
     except Exception:
         logger.exception("backfill_common_chats failed (continuing)")
+
     me = await app.get_me()
     logger.info(f"Logged in as @{me.username} ({me.id})")
     await idle()
