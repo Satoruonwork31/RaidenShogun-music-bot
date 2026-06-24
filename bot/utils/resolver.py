@@ -9,7 +9,9 @@ Resolution rules:
 - Resso song URL       -> scrape "Artist - Title" from the share page, YouTube-search it
 - Anything else (text) -> treat as a YouTube text search
 
-Returns (audio_stream_url, display_query) on success, (None, error_message) on failure.
+Returns (audio_stream_url, display_query) on success, (None, error_message)
+on failure. All known failure modes are caught so the caller can always
+edit_text the status message instead of leaving it hanging.
 """
 
 import asyncio
@@ -23,19 +25,40 @@ _YT_RE = re.compile(r"(?:youtube\.com|youtu\.be|music\.youtube\.com)", re.IGNORE
 _SC_RE = re.compile(r"(?:soundcloud\.com|snd\.sc)", re.IGNORECASE)
 
 
+def _humanize_ytdlp_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "sign in to confirm" in text or "not a bot" in text:
+        return (
+            "YouTube is asking yt-dlp to prove it's not a bot. Add a Netscape "
+            "`cookies.txt` from a logged-in YouTube account and set "
+            "`COOKIES_FILE=/absolute/path/cookies.txt` in `.env`, then restart."
+        )
+    if "video unavailable" in text or "private video" in text:
+        return "That video is unavailable or private."
+    if "age-restricted" in text or "age restricted" in text:
+        return "That video is age-restricted. Cookies from a verified account fix this."
+    if "no video found" in text or "unable to extract" in text:
+        return "yt-dlp couldn't extract that source. It may have been removed or moved."
+    return f"yt-dlp error: {exc}"
+
+
 async def resolve(query: str) -> tuple[str | None, str]:
     query = query.strip()
 
-    # Direct platforms handled by yt-dlp.
     if _YT_RE.search(query) or _SC_RE.search(query):
-        stream = await asyncio.to_thread(get_audio_stream, query)
+        try:
+            stream = await asyncio.to_thread(get_audio_stream, query)
+        except Exception as exc:
+            return None, _humanize_ytdlp_error(exc)
         if not stream:
             return None, "Couldn't extract an audio stream for that link."
         return stream, query
 
-    # Spotify -> metadata -> YouTube.
     if is_spotify_url(query):
-        meta = await resolve_spotify(query)
+        try:
+            meta = await resolve_spotify(query)
+        except Exception as exc:
+            return None, f"Spotify lookup failed: {exc}"
         if not meta:
             return None, (
                 "Spotify lookup failed. Make sure SPOTIFY_CLIENT_ID and "
@@ -43,22 +66,29 @@ async def resolve(query: str) -> tuple[str | None, str]:
             )
         return await _via_youtube_search(meta)
 
-    # Resso -> metadata -> YouTube.
     if is_resso_url(query):
-        meta = await resolve_resso(query)
+        try:
+            meta = await resolve_resso(query)
+        except Exception as exc:
+            return None, f"Resso lookup failed: {exc}"
         if not meta:
             return None, "Couldn't read song info from that Resso link."
         return await _via_youtube_search(meta)
 
-    # Plain text -> YouTube search.
     return await _via_youtube_search(query)
 
 
 async def _via_youtube_search(query: str) -> tuple[str | None, str]:
-    url = await asyncio.to_thread(search_youtube, query)
+    try:
+        url = await asyncio.to_thread(search_youtube, query)
+    except Exception as exc:
+        return None, _humanize_ytdlp_error(exc)
     if not url:
         return None, f"No YouTube result found for: {query}"
-    stream = await asyncio.to_thread(get_audio_stream, url)
+    try:
+        stream = await asyncio.to_thread(get_audio_stream, url)
+    except Exception as exc:
+        return None, _humanize_ytdlp_error(exc)
     if not stream:
         return None, f"Couldn't extract audio for: {query}"
     return stream, query

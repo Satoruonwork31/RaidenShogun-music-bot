@@ -1,21 +1,36 @@
+import os
+
 from yt_dlp import YoutubeDL
 
+# Optional path to a Netscape-format cookies.txt for YouTube. If set, yt-dlp
+# acts as your logged-in account and bypasses "Sign in to confirm you're not a
+# bot" blocks. Set COOKIES_FILE=/path/to/cookies.txt in .env (or in the env).
+COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
-def search_youtube(query):
-    ydl_opts = {
+
+def _opts(extra=None):
+    opts = {
         "format": "bestaudio/best",
         "quiet": True,
         "noplaylist": True,
-        "default_search": "ytsearch1",
-        "extract_flat": "in_playlist",
+        "no_warnings": True,
         "extractor_args": {
             "youtube": {
                 "player_client": ["android"],
             },
         },
     }
+    if COOKIES_FILE:
+        opts["cookiefile"] = COOKIES_FILE
+    if extra:
+        opts.update(extra)
+    return opts
 
-    with YoutubeDL(ydl_opts) as ydl:
+
+def search_youtube(query):
+    opts = _opts({"default_search": "ytsearch1", "extract_flat": "in_playlist"})
+
+    with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(query, download=False)
 
     entries = info.get("entries") if isinstance(info, dict) else None
@@ -27,18 +42,7 @@ def search_youtube(query):
 
 
 def get_audio_stream(url):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "quiet": True,
-        "noplaylist": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android"],
-            },
-        },
-    }
-
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL(_opts()) as ydl:
         info = ydl.extract_info(url, download=False)
 
     if not info:
