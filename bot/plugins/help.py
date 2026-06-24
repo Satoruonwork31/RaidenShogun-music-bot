@@ -3,11 +3,19 @@ from pyrogram.enums import ParseMode
 
 HELP_IMAGE = "https://i.ibb.co/0yjy0Cj0/0ad5a76f9731.jpg"
 
+# Photo caption — kept short so it fits Telegram's 1024-char media caption
+# limit. Full command listing goes out as a follow-up text message (HELP_BODY
+# below), which has the 4096-char text limit and easily fits.
+HELP_PHOTO_CAPTION = (
+    '<emoji id="5033104253846029290">🎵</emoji> <b>RaidenShogun Music Bot</b>\n\n'
+    "Use the message below to see every command."
+)
+
 # Pyrofork's HTML parser recognises ONLY <emoji id="..."> for custom emoji,
 # not the <tg-emoji emoji-id="..."> tag accepted by Telegram's HTTP Bot API.
 # Using the wrong tag silently strips the entity, leaving just the fallback.
 # The format is: <emoji id="ID">FALLBACK_EMOJI</emoji>
-HELP_CAPTION = (
+HELP_BODY = (
     '<emoji id="5033104253846029290">🎵</emoji> <b>RaidenShogun Music Bot Commands</b>\n\n'
     '<emoji id="5334653529741076580">🎶</emoji> <b>Music</b>\n'
     "• /play - Play a song\n"
@@ -47,8 +55,17 @@ HELP_CAPTION = (
 
 @Client.on_message(filters.command("help"))
 async def help_command(client, message):
-    await message.reply_photo(
-        photo=HELP_IMAGE,
-        caption=HELP_CAPTION,
-        parse_mode=ParseMode.HTML,
-    )
+    # Send the banner with a short caption (must be ≤ 1024 chars). The
+    # full command listing goes out as a follow-up text message (≤ 4096
+    # chars) so it can stay comprehensive without tripping
+    # MEDIA_CAPTION_TOO_LONG.
+    try:
+        await message.reply_photo(
+            photo=HELP_IMAGE,
+            caption=HELP_PHOTO_CAPTION,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        # Banner upload failure shouldn't block the actual help text.
+        pass
+    await message.reply_text(HELP_BODY, parse_mode=ParseMode.HTML)
