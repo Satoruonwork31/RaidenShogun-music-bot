@@ -11,22 +11,26 @@ from bot.utils import playback  # noqa: F401
 
 
 def _rebind_dispatcher_loops() -> None:
-    """Repair pyrofork's import-time loop capture.
+    """Repair every import-time loop capture in the stack.
 
-    Pyrofork's Dispatcher.__init__ calls asyncio.get_event_loop() at module
-    import time. On Python 3.10+ that returns a separate loop from the one
-    asyncio.run() creates at runtime — so handler-worker tasks get scheduled
-    on a dead loop and never execute. The bot logs in, the socket receives
-    UpdateNewMessage packets, the dispatcher queue fills up, and NO handler
-    ever fires because the workers are on a different loop.
+    Multiple libraries here call asyncio.get_event_loop() at module import
+    time and cache the result on self.loop. On Python 3.10+ that returns
+    a loop separate from the one asyncio.run() actually runs — so workers
+    schedule onto a dead loop, futures attach to the wrong loop, the whole
+    thing silently breaks. We re-point every captured reference at the
+    current running loop before any .start() call.
 
-    Pointing dispatcher.loop at the current running loop before any
-    `client.start()` call fixes this — Dispatcher.start uses self.loop to
-    spawn workers, so they land on the right loop.
+    Affected:
+    - pyrofork's `Dispatcher` on each Client (handler-worker scheduling,
+      causes "command not responding").
+    - py-tgcalls' `PyTgCalls` instance (causes "RuntimeError: Future
+      attached to a different loop" the moment music.play tries to
+      coordinate JoinGroupCall internally).
     """
     loop = asyncio.get_running_loop()
     for client in (app, userbot):
         client.dispatcher.loop = loop
+    music.loop = loop
 
 
 async def _run():
