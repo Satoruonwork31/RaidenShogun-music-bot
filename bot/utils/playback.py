@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from pytgcalls.types import AudioQuality, MediaStream
+from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream
 
 try:
     from pytgcalls.types import VideoQuality  # type: ignore
@@ -22,10 +22,43 @@ except Exception:  # pragma: no cover
     VideoQuality = None  # type: ignore
 
 from bot.client import userbot
+from bot.config import JOIN_AS
 from bot.utils import music as music_mod
 from bot.utils import queue as q
 
 logger = logging.getLogger("RaidenShogun.playback")
+
+# Cache the resolved JOIN_AS peer so we only hit Telegram once.
+_join_as_peer = None
+_join_as_attempted = False
+
+
+async def _resolve_join_as():
+    """Resolve the JOIN_AS channel to a peer the first time we need it.
+
+    Returns the resolved InputPeer or None if JOIN_AS is unset / didn't
+    resolve. Subsequent calls return the cached value.
+    """
+    global _join_as_peer, _join_as_attempted
+    if _join_as_attempted:
+        return _join_as_peer
+    _join_as_attempted = True
+    if not JOIN_AS:
+        return None
+    try:
+        peer = await userbot.resolve_peer(JOIN_AS)
+        _join_as_peer = peer
+        logger.info(
+            "JOIN_AS resolved %r → %s — voice chats will be joined as this peer",
+            JOIN_AS, type(peer).__name__,
+        )
+    except Exception as exc:
+        logger.warning(
+            "JOIN_AS %r could not be resolved: %s — falling back to userbot self",
+            JOIN_AS, exc,
+        )
+        _join_as_peer = None
+    return _join_as_peer
 
 
 def _build_stream(track: q.Track) -> MediaStream:
@@ -50,12 +83,18 @@ async def play_track(chat_id: int, track: q.Track) -> None:
         logger.warning("userbot.get_chat(%s) failed before play: %s", chat_id, exc)
 
     stream = _build_stream(track)
+    join_as_peer = await _resolve_join_as()
+    config = GroupCallConfig(join_as=join_as_peer) if join_as_peer is not None else None
     logger.info(
-        "music.play(chat=%s) video=%s url_head=%s",
-        chat_id, track.is_video, (track.stream_url or "")[:80],
+        "music.play(chat=%s) video=%s join_as=%s url_head=%s",
+        chat_id, track.is_video, "channel" if join_as_peer else "self",
+        (track.stream_url or "")[:80],
     )
     try:
-        await music_mod.music.play(chat_id, stream)
+        if config is not None:
+            await music_mod.music.play(chat_id, stream, config=config)
+        else:
+            await music_mod.music.play(chat_id, stream)
     except Exception:
         logger.exception("music.play raised in chat=%s", chat_id)
         raise
