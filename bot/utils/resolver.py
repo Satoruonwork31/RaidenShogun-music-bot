@@ -107,3 +107,49 @@ async def _via_youtube_search(query: str, *, video: bool = False) -> tuple[str |
             return stream, query
     kind = "video" if video else "audio"
     return None, last_err or f"Couldn't extract {kind} for: {query}"
+
+
+async def resolve_url(query: str) -> tuple[str | None, str]:
+    """Like `resolve` but returns a canonical webpage URL (not a streaming
+    URL). Used by /song and /video, which hand the URL to yt-dlp for an
+    on-disk download rather than a live stream.
+    """
+    query = query.strip()
+
+    if _YT_RE.search(query) or _SC_RE.search(query):
+        return query, query
+
+    if is_spotify_url(query):
+        try:
+            meta = await resolve_spotify(query)
+        except Exception as exc:
+            return None, f"Spotify lookup failed: {exc}"
+        if not meta:
+            return None, (
+                "Spotify lookup failed. Make sure SPOTIFY_CLIENT_ID and "
+                "SPOTIFY_CLIENT_SECRET are set in .env."
+            )
+        return await _first_youtube_url(meta)
+
+    if is_resso_url(query):
+        try:
+            meta = await resolve_resso(query)
+        except Exception as exc:
+            return None, f"Resso lookup failed: {exc}"
+        if not meta:
+            return None, "Couldn't read song info from that Resso link."
+        return await _first_youtube_url(meta)
+
+    return await _first_youtube_url(query)
+
+
+async def _first_youtube_url(query: str) -> tuple[str | None, str]:
+    try:
+        results = await asyncio.to_thread(search_youtube, query)
+    except Exception as exc:
+        return None, _humanize_ytdlp_error(exc)
+    if not results:
+        return None, f"No YouTube result found for: {query}"
+    if isinstance(results, str):
+        return results, query
+    return results[0], query

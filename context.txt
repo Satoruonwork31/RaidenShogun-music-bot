@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-24 (queue + real playback controls)
+Last updated: 2026-06-24 (queue, playback controls, /song, /video)
 
 ## Project Overview
 
@@ -30,6 +30,12 @@ admin /ban /unban, /id resolver, /toss, /greetings on|off toggle.
 - bot/utils/queue.py            — Per-chat playback queue. `Track` dataclass +
                                   now_playing / upcoming / enqueue / pop_next /
                                   clear / is_active / set_current. Lock-guarded.
+- bot/utils/downloader.py       — yt-dlp wrappers for /song and /video.
+                                  download_audio (mp3@192k via ffmpeg
+                                  postprocess) and download_video (≤720p mp4).
+                                  Reuses player.PLAYER_CLIENTS for the same
+                                  anti-bot-wall fallback. Hard caps: 20 min
+                                  duration, 1.5 GB filesize.
 - bot/utils/playback.py         — Orchestrator. `play_track(chat_id, track)`
                                   primes userbot peer cache, builds MediaStream
                                   (audio or video), calls music.play. Registers
@@ -73,9 +79,8 @@ See AUDIT_REPORT.md for the prioritized list and severity. High-level:
 
 - CRITICAL: Telegram credentials committed in .env to a public-looking GitHub
   remote. BOT_TOKEN, API_HASH, STRING_SESSION must be considered compromised.
-- ~~CRITICAL: /skip /pause /resume /stop /queue /vplay /vskip are placeholder
-  handlers~~ — FIXED 2026-06-24, see Fix History.
-  /song /video are still placeholders (download-and-send is separate work).
+- ~~CRITICAL: /skip /pause /resume /stop /queue /vplay /vskip /song /video
+  are placeholder handlers~~ — FIXED 2026-06-24, see Fix History.
 - ~~CRITICAL: No queue logic~~ — FIXED 2026-06-24, see Fix History.
 - HIGH: requirements.txt is fully unpinned — any rebuild may break.
 - HIGH: ptb_main.py is a parallel implementation that needs a decision
@@ -137,6 +142,32 @@ Verification NOT yet performed:
   sandbox). The leaked credentials in CRIT-1 must be rotated before any
   real-world run.
 
+### 2026-06-24 — /song and /video download-and-send
+
+Replaced the placeholder reply for /song and /video with real
+download-then-upload handlers.
+
+Files added:
+- bot/utils/downloader.py — download_audio / download_video built on yt-dlp
+  + player.PLAYER_CLIENTS fallback chain. Audio is post-processed to
+  mp3@192k via ffmpeg. Video is best mp4 ≤720p. Hard caps: 20 minutes /
+  1.5 GB. Caller deletes the file after upload.
+
+Files edited:
+- bot/utils/resolver.py — new resolve_url() returns canonical webpage URL
+  for the download path (vs resolve(), which returns a live streaming URL
+  used by /play).
+- bot/plugins/song.py — full implementation. resolve → probe → check cap
+  → download → send_audio (with title/performer/duration/thumb) → delete.
+- bot/plugins/video.py — same shape but send_video (width/height/
+  supports_streaming).
+
+Verification performed:
+- py_compile across new and changed files: PASS
+- Static export cross-check (resolve_url, download_audio, download_video,
+  check_size_and_duration): PASS
+- No live Telegram run (same reason as above).
+
 ## Testing History
 
 - 2026-06-24: Static read of all bot/*.py and ptb_main.py. No runtime tests.
@@ -174,3 +205,5 @@ Verification NOT yet performed:
   Wrote context.txt and AUDIT_REPORT.md.
 - 2026-06-24: Implemented real playback controls + per-chat queue (see Fix
   History). Static + unit verification only — no live Telegram run.
+- 2026-06-24: Implemented /song and /video download-and-send (see Fix
+  History). Static verification only.
