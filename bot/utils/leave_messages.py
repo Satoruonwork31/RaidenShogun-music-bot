@@ -105,18 +105,55 @@ MESSAGES = [
 ]
 
 _HISTORY_SIZE = 18
+
+# Batch 4: brutal but clean — no slurs, no SA references, no named bystanders.
+# Drawn at the rate below instead of from the main pool.
+EXTREME_MESSAGES = [
+    "{name} left. Ghop ghop ghop. The door doesn't even bother slamming for them. 🚪",
+    "{name} is gone. We held a vote on whether to grieve. Zero votes. Motion carried. 📋",
+    "{name} departed. They printed their participation trophy. We threw it in the recycling. ♻️",
+    "{name} left. The chat held its breath. Then realized it had been holding it the whole time they were here. 🫧",
+    "{name} packed up. Their luggage was lighter than the impression they left. ✈️",
+    "{name} is gone. We tried to write something kind. The cursor blinked at us in pity. 💻",
+    "{name} left. Even the unread counter laughed. 0. 0 unread. 0 missed. 0 wondered. 0️⃣",
+    "{name} departed. The group did the math. Their net contribution was a negative number. 🔢",
+    "{name} is gone. Their seat in the chat has been declared a haunted spot. We're roping it off. ⚠️",
+    "{name} left. The eulogy was one line: 'they were here.' Nobody requested an encore. 📜",
+    "{name} packed up. They thought leaving would punish us. We sent flowers. To ourselves. 💐",
+    "{name} is gone. The chat ran a diagnostic. Nothing was missing. ✅",
+    "{name} departed. We checked their pinned messages. None. Because they had none worth pinning. 📌",
+    "{name} left. Ghop ghop ghop. The dust settles. The chat hums. The void inherits them now. 🌑",
+    "{name} is gone. We tried to remember the last thing they said. We tried. We are still trying. We give up. ⏳",
+    "{name} packed up. They left a forwarding address. We won't be forwarding anything. 📬",
+    "{name} departed. The group went around the room sharing favorite memories. The room stayed quiet. 🤐",
+    "{name} left. The chat upgraded itself. No installation required. Default option: they aren't here. ✨",
+    "{name} is gone. Their digital footprint here was a wet leaf. The wind took it. 🍃",
+    "{name} packed up. We sat down to compile a list of reasons they'd be missed. We're recycling the paper. ♻️",
+]
+
+# Roughly 1 in 5 leaves pulls from the EXTREME pool.
+_EXTREME_RATE = 0.20
+
 _lock = Lock()
-_recent: dict[int, deque] = {}
+_recent: dict[tuple[int, str], deque] = {}
 
 
 def pick(chat_id: int) -> str:
-    """Return a message with `{name}` placeholder, avoiding recent repeats."""
+    """Return a message with `{name}` placeholder, avoiding recent repeats.
+
+    With probability `_EXTREME_RATE` the line comes from the dialed-up
+    EXTREME_MESSAGES pool; otherwise the main savage pool.
+    """
     with _lock:
-        history = _recent.setdefault(chat_id, deque(maxlen=_HISTORY_SIZE))
-        choices = [i for i in range(len(MESSAGES)) if i not in history]
+        if random.random() < _EXTREME_RATE:
+            pool, key = EXTREME_MESSAGES, "extreme"
+        else:
+            pool, key = MESSAGES, "normal"
+        history = _recent.setdefault((chat_id, key), deque(maxlen=_HISTORY_SIZE))
+        choices = [i for i in range(len(pool)) if i not in history]
         if not choices:
-            choices = list(range(len(MESSAGES)))
+            choices = list(range(len(pool)))
             history.clear()
         idx = random.choice(choices)
         history.append(idx)
-        return MESSAGES[idx]
+        return pool[idx]
