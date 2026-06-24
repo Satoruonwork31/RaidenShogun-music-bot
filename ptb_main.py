@@ -512,6 +512,14 @@ async def _send_welcome(context, chat_id: int, user) -> None:
     )
 
 
+async def _is_chat_owner_or_admin(context, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    return getattr(member, "status", "") in ("creator", "administrator")
+
+
 async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Legacy path: message with new_chat_members service entries."""
     msg = update.message
@@ -522,6 +530,8 @@ async def welcome_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     for user in msg.new_chat_members:
         if user.is_bot:
+            continue
+        if await _is_chat_owner_or_admin(context, update.effective_chat.id, user.id):
             continue
         await _send_welcome(context, update.effective_chat.id, user)
 
@@ -553,6 +563,11 @@ async def leave_legacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = msg.left_chat_member
     if user.is_bot:
         return
+    # Legacy path doesn't carry the prior status, so query the bot's cached
+    # member info — for users who already left this often returns "left" but
+    # for owners it still returns "creator".
+    if await _is_chat_owner_or_admin(context, update.effective_chat.id, user.id):
+        return
     await _send_leave_message(context, update.effective_chat.id, user)
 
 
@@ -570,12 +585,18 @@ async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE
     from bot.utils.greetings import is_enabled
 
     if old_status in ("left", "kicked") and new_status in ("member", "restricted"):
+        # Skip the welcome card for owners / admins re-joining (rare, but possible).
+        if new_status in ("creator", "administrator"):
+            return
         if not is_enabled(update.effective_chat.id):
             return
         await _send_welcome(context, update.effective_chat.id, user)
         return
 
-    if old_status in ("member", "restricted", "administrator") and new_status in ("left", "kicked"):
+    if old_status in ("member", "restricted", "administrator", "creator") and new_status in ("left", "kicked"):
+        # No savage farewell for owners or admins — they get a pass.
+        if old_status in ("creator", "administrator"):
+            return
         if not is_enabled(update.effective_chat.id):
             return
         await _send_leave_message(context, update.effective_chat.id, user)

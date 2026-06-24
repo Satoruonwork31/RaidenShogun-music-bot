@@ -60,6 +60,14 @@ async def _send_card(client, chat_id: int, user) -> None:
     )
 
 
+async def _is_chat_owner_or_admin(client, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+    except Exception:
+        return False
+    return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
+
+
 @Client.on_message(filters.new_chat_members & filters.group)
 async def welcome_new_members(client, message):
     """Legacy path used by regular groups."""
@@ -67,6 +75,8 @@ async def welcome_new_members(client, message):
         return
     for user in message.new_chat_members:
         if user.is_bot:
+            continue
+        if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
             continue
         await _send_card(client, message.chat.id, user)
 
@@ -97,6 +107,8 @@ async def leave_legacy(client, message):
     user = message.left_chat_member
     if not user or user.is_bot:
         return
+    if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
+        return
     await _send_leave(client, message.chat.id, user)
 
 
@@ -113,7 +125,13 @@ async def welcome_via_chat_member(client, chat_member_updated):
         return
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
+        # Skip the welcome for owners / admins re-joining.
+        if new_member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
+            return
         await _send_card(client, chat_member_updated.chat.id, new_member.user)
         return
     if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
+        # No savage farewell for owners or admins — they get a pass.
+        if old_status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
+            return
         await _send_leave(client, chat_member_updated.chat.id, new_member.user)
