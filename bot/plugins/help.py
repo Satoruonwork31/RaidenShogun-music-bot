@@ -34,10 +34,11 @@ HELP_CAPTION = (
     "• /help - Show this help menu\n"
     "• /ping - Check if the bot is online\n\n"
     '<emoji id="5341715473882955310">👑</emoji> <b>Sudo</b>\n'
+    "• /stats - (sudo) bot stats and version info\n"
     "• /broadcast - (sudo) push a message to every chat\n"
     "• /seeddm - (sudo) seed user IDs into the broadcast registry\n"
     "• /addsudo - (owner) grant sudo to a user\n"
-    "• /delsudo - (owner) revoke sudo from a user\n"
+    "• /delsudo (alias /removesudo) - (owner) revoke sudo\n"
     "• /sudolist - (sudo) list current sudoers"
 )
 

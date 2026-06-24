@@ -16,6 +16,11 @@ from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
+# Optional outbound proxy for yt-dlp. Set YT_DLP_PROXY=http://host:port (or
+# socks5://) in .env to rotate the bot's outbound IP — useful when YouTube
+# rate-limits the VPS or trips the bot-wall. Leave empty for no proxy.
+YT_DLP_PROXY = os.getenv("YT_DLP_PROXY", "").strip()
+
 # Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
 # - `web` is the only client that fully honours cookies AND can solve the
 #   n-challenge (with deno + ejs:github components downloaded).
@@ -51,6 +56,8 @@ def _opts_for(client: str, extra=None, *, video: bool = False) -> dict:
     }
     if COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
+    if YT_DLP_PROXY:
+        opts["proxy"] = YT_DLP_PROXY
     if extra:
         opts.update(extra)
     return opts
