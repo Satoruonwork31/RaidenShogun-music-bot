@@ -1,3 +1,4 @@
+import logging
 import os
 
 from pyrogram import Client, filters
@@ -6,6 +7,8 @@ from pyrogram.enums import ChatType
 from bot.utils import queue as q
 from bot.utils.playback import play_track
 from bot.utils.resolver import resolve
+
+logger = logging.getLogger("RaidenShogun.play")
 
 DOWNLOAD_DIR = "/tmp/raiden_downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -74,15 +77,22 @@ async def _do_play(client, message, *, is_video: bool):
             )
             info = replied_label
         except Exception as exc:
+            logger.exception("download of replied media failed")
             await status.edit_text(f"❌ Download failed: {exc}")
             return
     else:
         query = " ".join(message.command[1:])
         status = await message.reply_text(f"🔍 Resolving: {query}")
+        logger.info("resolve(%r, video=%s) for chat=%s", query, is_video, message.chat.id)
         stream_url, info = await resolve(query, video=is_video)
         if not stream_url:
+            logger.warning("resolve returned no stream_url for %r — %s", query, info)
             await status.edit_text(f"❌ {info}")
             return
+        logger.info(
+            "resolved %r → label=%r url_len=%s url_head=%s",
+            query, info, len(stream_url or ""), (stream_url or "")[:80],
+        )
 
     track = q.Track(
         stream_url=stream_url,
@@ -99,14 +109,17 @@ async def _do_play(client, message, *, is_video: bool):
         )
         return
 
+    logger.info("calling play_track for chat=%s title=%r", message.chat.id, info)
     try:
         await play_track(message.chat.id, track)
     except Exception as exc:
+        logger.exception("play_track raised")
         await status.edit_text(f"❌ Playback failed: {type(exc).__name__}: {exc}")
         return
 
     icon = "🎬" if is_video else "🎵"
     await status.edit_text(f"{icon} Now Playing: {info}")
+    logger.info("play_track returned cleanly for chat=%s", message.chat.id)
 
 
 @Client.on_message(filters.command("play"))

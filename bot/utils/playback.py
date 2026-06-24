@@ -66,7 +66,17 @@ async def play_track(chat_id: int, track: q.Track) -> None:
     except Exception as exc:
         logger.warning("userbot.get_chat(%s) failed before play: %s", chat_id, exc)
 
-    await music.play(chat_id, _build_stream(track))
+    stream = _build_stream(track)
+    logger.info(
+        "music.play(chat=%s) video=%s url_head=%s",
+        chat_id, track.is_video, (track.stream_url or "")[:80],
+    )
+    try:
+        await music.play(chat_id, stream)
+    except Exception as exc:
+        logger.exception("music.play raised in chat=%s", chat_id)
+        raise
+    logger.info("music.play returned cleanly for chat=%s", chat_id)
     q.set_current(chat_id, track)
 
 
