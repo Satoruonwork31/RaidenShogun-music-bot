@@ -42,3 +42,16 @@ async def get_owner_id() -> Optional[int]:
 async def is_owner(user_id: int) -> bool:
     owner = await get_owner_id()
     return owner is not None and user_id == owner
+
+
+async def is_sudo(user_id: int) -> bool:
+    """True if the user is the owner OR an explicit sudoer.
+
+    Use this for any command that should be delegable (e.g. /broadcast).
+    Reserve is_owner for actions that mutate the privileged user list
+    itself (/addsudo, /delsudo).
+    """
+    if await is_owner(user_id):
+        return True
+    from bot.utils import sudo as sudo_store
+    return sudo_store.is_sudoer(user_id)

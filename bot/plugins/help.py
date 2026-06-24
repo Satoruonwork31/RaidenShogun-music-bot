@@ -32,9 +32,13 @@ HELP_CAPTION = (
     '<emoji id="5341715473882955310">⚙️</emoji> <b>General</b>\n'
     "• /start - Show the welcome message\n"
     "• /help - Show this help menu\n"
-    "• /ping - Check if the bot is online\n"
-    "• /broadcast - (owner only) push a message to every chat\n"
-    "• /seeddm - (owner only) add user IDs to the broadcast DM list"
+    "• /ping - Check if the bot is online\n\n"
+    '<emoji id="5341715473882955310">👑</emoji> <b>Sudo</b>\n'
+    "• /broadcast - (sudo) push a message to every chat\n"
+    "• /seeddm - (sudo) seed user IDs into the broadcast registry\n"
+    "• /addsudo - (owner) grant sudo to a user\n"
+    "• /delsudo - (owner) revoke sudo from a user\n"
+    "• /sudolist - (sudo) list current sudoers"
 )
 
 

@@ -20,7 +20,7 @@ import logging
 from pyrogram import Client, filters
 
 from bot.utils import chats
-from bot.utils.owner import is_owner
+from bot.utils.owner import is_sudo
 
 logger = logging.getLogger("RaidenShogun.seeddm")
 
@@ -36,8 +36,8 @@ def _parse_ids_from_args(args) -> list[int]:
 
 @Client.on_message(filters.command("seeddm"))
 async def seeddm_command(client, message):
-    if not message.from_user or not await is_owner(message.from_user.id):
-        await message.reply_text("🔒 /seeddm is owner-only.")
+    if not message.from_user or not await is_sudo(message.from_user.id):
+        await message.reply_text("🔒 /seeddm is sudo-only.")
         return
 
     ids: list[int] = []

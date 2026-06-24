@@ -16,12 +16,20 @@ from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
-# Order matters — fastest / most reliable first.
+# Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
+# - `web` is the only client that fully honours cookies AND can solve the
+#   n-challenge (with deno + ejs:github components downloaded).
+# - `mweb` is a lighter web variant, also cookie-aware.
+# - `tv` is the new name for the old tv_embedded client.
+# - `android` and `ios` are kept as bot-wall fallbacks but they silently
+#   drop cookies, so they only work for videos not gated by the wall.
+# Older client names (tv_embedded, mediaconnect_frontend) were removed
+# and yt-dlp prints "Skipping unsupported client" for them.
 PLAYER_CLIENTS = [
-    "tv_embedded",
-    "mediaconnect_frontend",
-    "android",
     "web",
+    "mweb",
+    "tv",
+    "android",
     "ios",
 ]
 

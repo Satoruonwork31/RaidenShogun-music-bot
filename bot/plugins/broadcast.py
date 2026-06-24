@@ -28,7 +28,7 @@ from pyrogram.errors import (
 )
 
 from bot.utils import chats
-from bot.utils.owner import is_owner
+from bot.utils.owner import is_sudo
 
 logger = logging.getLogger("RaidenShogun.broadcast")
 
@@ -79,8 +79,8 @@ async def _maybe_pin(client, message) -> bool:
 async def broadcast_command(client, message):
     if not message.from_user:
         return
-    if not await is_owner(message.from_user.id):
-        await message.reply_text("🔒 /broadcast is owner-only.")
+    if not await is_sudo(message.from_user.id):
+        await message.reply_text("🔒 /broadcast is sudo-only.")
         return
 
     reply = message.reply_to_message
