@@ -75,18 +75,28 @@ def _try_extract(url_or_query: str, extra: dict | None = None) -> dict | None:
     return None
 
 
-def search_youtube(query):
+def search_youtube(query, limit: int = 5):
+    """Return up to `limit` candidate YouTube watch URLs.
+
+    Returns either a single URL (kept for back-compat with old callers) or a
+    list of URLs. The resolver iterates through the list so that if YouTube
+    gates one result with the bot wall, we can try the next.
+    """
     info = _try_extract(
         query,
-        {"default_search": "ytsearch1", "extract_flat": "in_playlist"},
+        {"default_search": f"ytsearch{limit}", "extract_flat": "in_playlist"},
     )
     if not isinstance(info, dict):
-        return None
-    entries = info.get("entries")
-    if entries:
-        entry = entries[0]
-        return entry.get("webpage_url") or entry.get("url")
-    return info.get("webpage_url")
+        return []
+    entries = info.get("entries") or []
+    urls = []
+    for entry in entries[:limit]:
+        link = entry.get("webpage_url") or entry.get("url")
+        if link:
+            urls.append(link)
+    if not urls and info.get("webpage_url"):
+        urls.append(info["webpage_url"])
+    return urls if urls else None
 
 
 def get_audio_stream(url):

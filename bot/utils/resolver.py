@@ -80,15 +80,22 @@ async def resolve(query: str) -> tuple[str | None, str]:
 
 async def _via_youtube_search(query: str) -> tuple[str | None, str]:
     try:
-        url = await asyncio.to_thread(search_youtube, query)
+        results = await asyncio.to_thread(search_youtube, query)
     except Exception as exc:
         return None, _humanize_ytdlp_error(exc)
-    if not url:
+    if not results:
         return None, f"No YouTube result found for: {query}"
-    try:
-        stream = await asyncio.to_thread(get_audio_stream, url)
-    except Exception as exc:
-        return None, _humanize_ytdlp_error(exc)
-    if not stream:
-        return None, f"Couldn't extract audio for: {query}"
-    return stream, query
+    # Normalize: search_youtube may return a single URL (legacy) or a list.
+    if isinstance(results, str):
+        results = [results]
+
+    last_err: str | None = None
+    for url in results:
+        try:
+            stream = await asyncio.to_thread(get_audio_stream, url)
+        except Exception as exc:
+            last_err = _humanize_ytdlp_error(exc)
+            continue
+        if stream:
+            return stream, query
+    return None, last_err or f"Couldn't extract audio for: {query}"
