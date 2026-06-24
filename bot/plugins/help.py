@@ -21,8 +21,10 @@ HELP_CAPTION = (
     "• /stop - Stop playback\n"
     "• /queue - Show the music queue\n\n"
     '<emoji id="4958900559139570572">🛡</emoji> <b>Moderation</b>\n'
-    "• /ban - Ban a user\n"
-    "• /unban - Unban a user\n\n"
+    "• /ban - Ban a user in this chat\n"
+    "• /unban - Unban a user in this chat\n"
+    "• /gban - (sudo) global ban across every chat the bot is in\n"
+    "• /removegban (alias /ungban) - (sudo) lift a global ban\n\n"
     '<emoji id="5816875690183631180">👋</emoji> <b>Welcome &amp; Greetings</b>\n'
     "• /greetings on|off - Toggle welcome &amp; farewell messages\n\n"
     '<emoji id="5972061723400605896">🎲</emoji> <b>Fun</b>\n'

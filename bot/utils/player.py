@@ -16,14 +16,34 @@ from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
-# Outbound proxy for yt-dlp specifically. If unset, fall back to the
-# global PROXY_URL so a single var configures both Telegram and yt-dlp.
-# Either accepts http://host:port, socks5://host:port, with optional
-# user:pass@.
-YT_DLP_PROXY = (
-    os.getenv("YT_DLP_PROXY", "").strip()
-    or os.getenv("PROXY_URL", "").strip()
-)
+# Outbound proxy for yt-dlp specifically. If unset, fall back to:
+#   1) PROXY_URL (explicit single proxy)
+#   2) the same picked-from-pool config that Telegram uses (so a single
+#      pool file configures both).
+def _yt_dlp_proxy() -> str:
+    explicit = os.getenv("YT_DLP_PROXY", "").strip()
+    if explicit:
+        return explicit
+    single = os.getenv("PROXY_URL", "").strip()
+    if single:
+        return single
+    # Reuse the same config.PROXY pick — yt-dlp wants a URL string.
+    try:
+        from bot.config import PROXY
+    except Exception:
+        return ""
+    if not PROXY:
+        return ""
+    auth = ""
+    if PROXY.get("username"):
+        auth = PROXY["username"]
+        if PROXY.get("password"):
+            auth += ":" + PROXY["password"]
+        auth += "@"
+    return f"{PROXY['scheme']}://{auth}{PROXY['hostname']}:{PROXY['port']}"
+
+
+YT_DLP_PROXY = _yt_dlp_proxy()
 
 # Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
 # - `web` is the only client that fully honours cookies AND can solve the

@@ -146,15 +146,23 @@ async def broadcast_command(client, message):
             PeerIdInvalid,
             UserIsBlocked,
             UserIsBot,
-            ChatWriteForbidden,
-            ChannelPrivate,
             ChannelInvalid,
         ) as exc:
-            # Bot was kicked, user blocked us, chat was deleted, etc.
-            # Drop from the list so it stops counting toward future broadcasts.
+            # Permanently dead: bot was kicked, user blocked us, chat or
+            # channel id no longer resolves. Drop from registry.
             forgotten += 1
             chats.forget(chat_id)
             logger.info("Forgetting %s: %s: %s", chat_id, type(exc).__name__, exc)
+        except (ChatWriteForbidden, ChannelPrivate) as exc:
+            # Recoverable: bot lost write/pin permission in this chat, or
+            # the channel is currently private/admin-only. Keep the chat
+            # in the registry so the next broadcast tries again once
+            # permissions are restored.
+            failed += 1
+            logger.info(
+                "Broadcast to %s blocked (kept in registry): %s: %s",
+                chat_id, type(exc).__name__, exc,
+            )
         except Exception as exc:
             failed += 1
             logger.info("Broadcast to %s failed: %s: %s", chat_id, type(exc).__name__, exc)
