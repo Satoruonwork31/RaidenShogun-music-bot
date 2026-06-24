@@ -45,8 +45,17 @@ async def _resolve_join_as():
     _join_as_attempted = True
     if not JOIN_AS:
         return None
+    # Pyrofork's resolve_peer treats a string as a @username and rejects
+    # numeric chat ids in string form with PEER_ID_INVALID. Coerce
+    # JOIN_AS to int when it looks like an id so both env-var forms work:
+    #   JOIN_AS=-1001234567890
+    #   JOIN_AS=@my_channel
+    peer_input: object = JOIN_AS
+    stripped = JOIN_AS.lstrip("-")
+    if stripped.isdigit():
+        peer_input = int(JOIN_AS)
     try:
-        peer = await userbot.resolve_peer(JOIN_AS)
+        peer = await userbot.resolve_peer(peer_input)
         _join_as_peer = peer
         logger.info(
             "JOIN_AS resolved %r → %s — voice chats will be joined as this peer",
