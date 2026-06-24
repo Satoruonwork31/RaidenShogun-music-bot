@@ -179,5 +179,18 @@ async def broadcast_command(client, message):
 # — different groups all fire independently.
 @Client.on_message(filters.all, group=-1)
 async def _track_chat(client, message):
-    if message.chat is not None:
-        chats.remember(message.chat.id)
+    chat = message.chat
+    user = message.from_user
+    text = (message.text or message.caption or "")[:60]
+    logger.info(
+        "saw msg in chat=%s (type=%s) from user=%s (id=%s) text=%r",
+        chat.id if chat else None,
+        chat.type.value if chat and chat.type else None,
+        user.username if user else None,
+        user.id if user else None,
+        text,
+    )
+    if chat is not None:
+        added = chats.remember(chat.id)
+        if added:
+            logger.info("registered new chat %s in registry", chat.id)
