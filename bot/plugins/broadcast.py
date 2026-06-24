@@ -15,7 +15,7 @@ import asyncio
 import logging
 
 from pyrogram import Client, filters
-from pyrogram.enums import ChatType
+from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.errors import (
     ChannelInvalid,
     ChannelPrivate,
@@ -172,6 +172,33 @@ async def broadcast_command(client, message):
         await status.edit_text(summary)
     except Exception:
         await message.reply_text(summary)
+
+
+# Track the bot's OWN membership changes — fires when the bot is added to
+# a group, removed, promoted, or restricted. Registers the chat on join,
+# drops it on leave. Future-proofs the broadcast registry against the
+# /broadcast-only-hits-my-DM symptom.
+_PRESENT = (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
+_GONE = (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
+
+
+@Client.on_chat_member_updated()
+async def _track_self_membership(client, update):
+    new = getattr(update, "new_chat_member", None)
+    if new is None or new.user is None:
+        return
+    if not getattr(new.user, "is_self", False):
+        # Some other member changed — not our concern; welcome.py handles that.
+        return
+    chat_id = update.chat.id if update.chat else None
+    if chat_id is None:
+        return
+    if new.status in _PRESENT:
+        if chats.remember(chat_id):
+            logger.info("self added to chat %s (status=%s)", chat_id, new.status)
+    elif new.status in _GONE:
+        if chats.forget(chat_id):
+            logger.info("self removed from chat %s (status=%s)", chat_id, new.status)
 
 
 # Passive: record every chat the bot sees a message in. group=-1 runs

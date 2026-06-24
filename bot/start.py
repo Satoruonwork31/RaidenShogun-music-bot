@@ -39,6 +39,15 @@ async def _run():
     await userbot.start()
     await music.start()
     await app.start()
+
+    # Backfill the /broadcast chat registry from the userbot's perspective.
+    # Bots can't enumerate their own dialogs, so on a fresh start the
+    # registry would only know chats that have sent a message since boot.
+    from bot.utils.discover import backfill_common_chats
+    try:
+        await backfill_common_chats()
+    except Exception:
+        logger.exception("backfill_common_chats failed (continuing)")
     me = await app.get_me()
     logger.info(f"Logged in as @{me.username} ({me.id})")
     await idle()
