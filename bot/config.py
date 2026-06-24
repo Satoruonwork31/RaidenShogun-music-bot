@@ -129,17 +129,3 @@ def _pick_proxy() -> dict | None:
 # Leave PROXY_URL/PROXIES_FILE empty for direct connection.
 PROXY_URL = os.getenv("PROXY_URL", "").strip()
 PROXY = _pick_proxy()
-
-# Optional: have the userbot join voice chats AS a channel instead of
-# its own account. Channels are subject to much weaker Telegram
-# anti-spam than bare user accounts, so this is the standard workaround
-# when the userbot keeps getting auto-kicked from VCs.
-#
-# Value can be:
-#   "@my_channel_username" — public channel
-#   "-1001234567890"       — channel id
-#   ""                     — disabled, userbot joins as itself
-#
-# The channel must exist, and the userbot must be a member (typically
-# admin) of it. Channels you own count.
-JOIN_AS = os.getenv("JOIN_AS", "").strip()
