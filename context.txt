@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-24 (queue, playback controls, /song, /video)
+Last updated: 2026-06-24 (queue, playback, /song, /video, /broadcast)
 
 ## Project Overview
 
@@ -30,6 +30,15 @@ admin /ban /unban, /id resolver, /toss, /greetings on|off toggle.
 - bot/utils/queue.py            — Per-chat playback queue. `Track` dataclass +
                                   now_playing / upcoming / enqueue / pop_next /
                                   clear / is_active / set_current. Lock-guarded.
+- bot/utils/chats.py            — Persistent registry of chat IDs the bot
+                                  has seen (used by /broadcast since bots
+                                  can't enumerate dialogs over MTProto).
+                                  remember / forget / all_chats / count.
+                                  JSON at $CHATS_FILE (default chats.json).
+- bot/utils/owner.py            — Owner identification. Defaults to
+                                  userbot.me.id (the user whose STRING_SESSION
+                                  is in .env). Override with OWNER_ID env var.
+                                  is_owner / get_owner_id, cached.
 - bot/utils/downloader.py       — yt-dlp wrappers for /song and /video.
                                   download_audio (mp3@192k via ffmpeg
                                   postprocess) and download_video (≤720p mp4).
@@ -142,6 +151,49 @@ Verification NOT yet performed:
   sandbox). The leaked credentials in CRIT-1 must be rotated before any
   real-world run.
 
+### 2026-06-24 — /broadcast (owner-only fan-out)
+
+Added `/broadcast` for the bot owner to push a message to every chat the
+bot has been seen in.
+
+Two forms:
+- `/broadcast <text>` — sends text to every chat
+- Reply to a message with `/broadcast` — copies the replied message
+  verbatim (text, media, captioned media — `Message.copy` preserves all)
+
+In groups/supergroups the resulting message is pinned silently. DMs are
+not pinned by design (intrusive).
+
+Files added:
+- bot/utils/chats.py (chat registry, JSON-persisted, lock-guarded,
+  atomic save via tmp+rename)
+- bot/utils/owner.py (derives owner_id from userbot.get_me() the first
+  time, cached; OWNER_ID env var overrides)
+- bot/plugins/broadcast.py (the command + a passive group=-1 handler
+  that records chat_ids from every incoming message)
+
+Files edited:
+- bot/core/loader.py (added "broadcast" to PLUGINS list)
+
+Behaviour notes:
+- Owner gate: rejects non-owners with 🔒.
+- FloodWait: caught, slept for the requested seconds + 1, retried once.
+- "Dead chat" errors (PeerIdInvalid, UserIsBlocked, ChatWriteForbidden,
+  ChannelPrivate, ChannelInvalid, UserIsBot) drop the chat from the
+  registry so future broadcasts skip it.
+- 0.05s pacing between sends (~20/s) so we don't trip the per-bot limit.
+- Returns a 4-line summary: sent / pinned / failed / forgotten.
+
+Chat tracking caveat: bots only learn about chats from incoming messages,
+so the first broadcast right after deploy will reach only chats that have
+exchanged a message with the bot since the registry was created. There's
+no way to backfill (Telegram doesn't expose dialog enumeration to bots).
+
+Verification:
+- py_compile of all new/changed files: PASS
+- Unit-tested chats.remember/forget/all_chats: PASS
+- Bot restarted cleanly with the new plugin loaded.
+
 ### 2026-06-24 — /song and /video download-and-send
 
 Replaced the placeholder reply for /song and /video with real
@@ -207,3 +259,6 @@ Verification performed:
   History). Static + unit verification only — no live Telegram run.
 - 2026-06-24: Implemented /song and /video download-and-send (see Fix
   History). Static verification only.
+- 2026-06-24: Added /broadcast (owner-only) + persistent chat registry +
+  owner derivation from userbot session. Restarted bot in sandbox; clean
+  startup (PID 4315 currently).
