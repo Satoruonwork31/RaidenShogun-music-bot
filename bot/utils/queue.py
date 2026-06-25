@@ -13,6 +13,7 @@ PyTgCalls task. Using a stdlib `Lock` keeps the data structure safe even
 if a /skip lands at the same instant as a natural stream-end.
 """
 
+import random
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
@@ -30,6 +31,11 @@ class Track:
 _lock = Lock()
 _current: dict[int, Track] = {}
 _upcoming: dict[int, deque] = {}
+_history: dict[int, deque] = {}
+_repeat: dict[int, bool] = {}
+
+# Cap per-chat history so a 24h binge doesn't pile up memory.
+_HISTORY_MAX = 50
 
 
 def now_playing(chat_id: int) -> Optional[Track]:
@@ -65,11 +71,18 @@ def enqueue(chat_id: int, track: Track) -> int:
 def pop_next(chat_id: int) -> Optional[Track]:
     """Move the next upcoming track into `current` and return it.
 
-    If there is nothing upcoming, clears `current` for this chat and
-    returns None — callers should interpret that as "queue exhausted,
-    leave the call."
+    The displaced current track is pushed onto the history deque so the
+    ⏮ control can step backwards. If there is nothing upcoming, clears
+    `current` for this chat and returns None — callers should interpret
+    that as "queue exhausted, leave the call."
     """
     with _lock:
+        # Push the outgoing current to history before we overwrite it.
+        prev = _current.get(chat_id)
+        if prev is not None:
+            hist = _history.setdefault(chat_id, deque(maxlen=_HISTORY_MAX))
+            hist.append(prev)
+
         q = _upcoming.get(chat_id)
         if not q:
             _current.pop(chat_id, None)
@@ -79,8 +92,66 @@ def pop_next(chat_id: int) -> Optional[Track]:
         return nxt
 
 
+def pop_history(chat_id: int) -> Optional[Track]:
+    """Return the most recently played track and push the current one
+    back to the front of the upcoming queue. Used by the ⏮ button.
+    """
+    with _lock:
+        hist = _history.get(chat_id)
+        if not hist:
+            return None
+        prev = hist.pop()
+        # Re-queue the current track at the front, so when prev finishes
+        # the natural advance brings us back to where we were.
+        cur = _current.get(chat_id)
+        if cur is not None:
+            up = _upcoming.setdefault(chat_id, deque())
+            up.appendleft(cur)
+        _current[chat_id] = prev
+        return prev
+
+
+def shuffle_upcoming(chat_id: int) -> int:
+    """Shuffle the upcoming queue in place. Returns its length."""
+    with _lock:
+        q = _upcoming.get(chat_id)
+        if not q or len(q) < 2:
+            return len(q) if q else 0
+        items = list(q)
+        random.shuffle(items)
+        q.clear()
+        q.extend(items)
+        return len(q)
+
+
+def get_repeat(chat_id: int) -> bool:
+    with _lock:
+        return _repeat.get(chat_id, False)
+
+
+def set_repeat(chat_id: int, on: bool) -> None:
+    with _lock:
+        if on:
+            _repeat[chat_id] = True
+        else:
+            _repeat.pop(chat_id, None)
+
+
+def toggle_repeat(chat_id: int) -> bool:
+    """Flip the per-chat repeat flag. Returns the new state."""
+    with _lock:
+        new = not _repeat.get(chat_id, False)
+        if new:
+            _repeat[chat_id] = True
+        else:
+            _repeat.pop(chat_id, None)
+        return new
+
+
 def clear(chat_id: int) -> None:
     """Forget all queue state for this chat — used by /stop."""
     with _lock:
         _current.pop(chat_id, None)
         _upcoming.pop(chat_id, None)
+        _history.pop(chat_id, None)
+        _repeat.pop(chat_id, None)

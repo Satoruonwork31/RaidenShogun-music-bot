@@ -24,6 +24,7 @@ PLUGINS = [
     "broadcast",
     "stats",
     "sudo",
+    "playback_buttons",
 ]
 
 def load_plugins():

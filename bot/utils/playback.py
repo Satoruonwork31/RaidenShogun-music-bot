@@ -143,6 +143,17 @@ async def _on_pytgcalls_update(_, update) -> None:
     if chat_id is None:
         return
 
+    # Repeat-current short-circuits the queue advance entirely.
+    if q.get_repeat(chat_id):
+        cur = q.now_playing(chat_id)
+        if cur is not None:
+            try:
+                await play_track(chat_id, cur)
+            except Exception:
+                logger.exception("Repeat-replay failed for chat %s", chat_id)
+                await end_session(chat_id)
+            return
+
     nxt = q.pop_next(chat_id)
     if nxt is None:
         # Queue exhausted: end the session AND have the assistant exit the

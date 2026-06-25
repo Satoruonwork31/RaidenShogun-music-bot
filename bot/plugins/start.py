@@ -61,9 +61,13 @@ Use /help to view all available commands.
                 ),
             ],
             [
+                # Open the paginated /help on page 0. The bare
+                # callback_data="help" matched no handler — help.py's
+                # regex is ^help:(\d+|noop)$ — so the button was silently
+                # dead until this was changed.
                 InlineKeyboardButton(
                     "📚 Help & Commands",
-                    callback_data="help"
+                    callback_data="help:0"
                 ),
             ],
         ]

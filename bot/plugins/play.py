@@ -2,9 +2,10 @@ import logging
 import os
 
 from pyrogram import Client, filters
-from pyrogram.enums import ChatType
+from pyrogram.enums import ChatType, ParseMode
 
 from bot.utils import queue as q
+from bot.utils.np_ui import nowplaying_keyboard, render_for_chat
 from bot.utils.playback import ensure_userbot_in_chat, play_track
 from bot.utils.resolver import resolve
 
@@ -125,8 +126,21 @@ async def _do_play(client, message, *, is_video: bool):
         await status.edit_text(f"❌ Playback failed: {type(exc).__name__}: {exc}")
         return
 
-    icon = "🎬" if is_video else "🎵"
-    await status.edit_text(f"{icon} Now Playing: {info}")
+    # Render the Now Playing card. Old short reply is gone — the
+    # boxed UI doubles as the "we started" confirmation.
+    try:
+        await status.edit_text(
+            render_for_chat(message.chat.id, track),
+            parse_mode=ParseMode.HTML,
+            reply_markup=nowplaying_keyboard(),
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        # Rendering issues (e.g. an unsupported emoji tag on a fork) must
+        # not kill playback. Fall back to a plain confirmation.
+        logger.exception("now-playing render failed: %s", exc)
+        icon = "🎬" if is_video else "🎵"
+        await status.edit_text(f"{icon} Now Playing: {info}")
     logger.info("play_track returned cleanly for chat=%s", message.chat.id)
 
 
