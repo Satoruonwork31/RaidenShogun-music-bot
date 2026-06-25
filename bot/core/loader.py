@@ -20,7 +20,10 @@ PLUGINS = [
     "id",
     "welcome",
     "greetings",
+    "departure",
     "broadcast",
+    "stats",
+    "sudo",
 ]
 
 def load_plugins():

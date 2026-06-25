@@ -1,6 +1,40 @@
 # RaidenShogun Music Bot — Audit Report
 
-Date: 2026-06-24
+Date: 2026-06-24 (initial), 2026-06-25 (delta below)
+
+## 2026-06-25 — Delta
+
+Resolved this pass (see context.txt Fix History for details):
+- **Owner-gating false-rejections** — `OWNER_ID` env var now accepts a
+  comma/whitespace list; if unset, the bot still falls back to the
+  userbot id but logs a warning. Denial messages from
+  `/sudolist /addsudo /removesudo /broadcast /stats` now show the
+  caller's id and the configured owner ids, so misconfiguration is
+  visible at the user level.
+- **Departures silent** — split out of the `/greetings` toggle. New
+  `bot/utils/departure.py` + `bot/plugins/departure.py`, default ON,
+  admin-gated `/departure on|off`. `bot/plugins/welcome.py` leave
+  handlers now consult `departure.is_enabled`.
+- **HIGH-3 (assistant not auto-invited)** — partially addressed.
+  `bot/utils/playback.py::ensure_userbot_in_chat` uses
+  `app.export_chat_invite_link` + `userbot.join_chat`. Works only if
+  the bot is admin with invite-link rights; otherwise reports a clear
+  error.
+- **New: assistant auto-leave after VC** — anti-misuse. Natural
+  stream-end with empty queue, `/stop`, `/end`, and `/skip` on empty
+  queue all call `playback.end_session()` which leaves the call AND
+  has the userbot leave the group.
+
+Still open:
+- CRIT-1 (credential leak) — still requires user action (rotate
+  BOT_TOKEN, STRING_SESSION, purge `.env` from git history).
+- HIGH-2 (unpinned requirements) — unchanged.
+- MED-1, MED-2, MED-3, MED-4 (already noted in original).
+- MED-5 / MED-6 — unchanged.
+
+---
+
+## Original report (2026-06-24)
 Auditor scope: static read of `main.py`, `bot/`, `ptb_main.py`, `scripts/`,
 `requirements.txt`, `.env`, `.gitignore`, recent `git log`. No runtime
 execution (Telegram network unavailable in this sandbox, and the leaked

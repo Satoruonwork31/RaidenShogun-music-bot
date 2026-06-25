@@ -15,7 +15,7 @@ import asyncio
 import logging
 
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus, ChatType
+from pyrogram.enums import ChatMemberStatus, ChatType, ParseMode
 from pyrogram.errors import (
     ChannelInvalid,
     ChannelPrivate,
@@ -28,7 +28,7 @@ from pyrogram.errors import (
 )
 
 from bot.utils import chats
-from bot.utils.owner import is_sudo
+from bot.utils.owner import get_owner_ids, is_sudo
 
 logger = logging.getLogger("RaidenShogun.broadcast")
 
@@ -80,7 +80,14 @@ async def broadcast_command(client, message):
     if not message.from_user:
         return
     if not await is_sudo(message.from_user.id):
-        await message.reply_text("🔒 /broadcast is sudo-only.")
+        owners = await get_owner_ids()
+        await message.reply_text(
+            "🔒 /broadcast is sudo-only.\n\n"
+            f"Your ID: <code>{message.from_user.id}</code>\n"
+            f"Configured owner(s): <code>{', '.join(str(i) for i in sorted(owners)) or '(none)'}</code>\n\n"
+            "Owner can grant access with /addsudo, or set OWNER_ID/SUDO_USERS in .env.",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     reply = message.reply_to_message

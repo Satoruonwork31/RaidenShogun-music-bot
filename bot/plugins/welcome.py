@@ -3,6 +3,7 @@ import os
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ParseMode
 
+from bot.utils.departure import is_enabled as departure_enabled
 from bot.utils.greetings import is_enabled
 from bot.utils.leave_messages import pick as pick_leave_message
 from bot.utils.welcome_image import render_welcome_card
@@ -103,7 +104,7 @@ async def _send_leave(client, chat_id: int, user) -> None:
 
 @Client.on_message(filters.left_chat_member & filters.group)
 async def leave_legacy(client, message):
-    if not is_enabled(message.chat.id):
+    if not departure_enabled(message.chat.id):
         return
     user = message.left_chat_member
     if not user or user.is_bot:
@@ -118,21 +119,24 @@ async def welcome_via_chat_member(client, chat_member_updated):
     """Modern path used by supergroups — fires on member status changes."""
     if chat_member_updated.chat is None:
         return
-    if not is_enabled(chat_member_updated.chat.id):
-        return
     new_member = chat_member_updated.new_chat_member
     old_member = chat_member_updated.old_chat_member
     if not new_member or not new_member.user or new_member.user.is_bot:
         return
+    chat_id = chat_member_updated.chat.id
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
+        if not is_enabled(chat_id):
+            return
         # Skip the welcome for owners / admins re-joining.
         if new_member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return
-        await _send_card(client, chat_member_updated.chat.id, new_member.user)
+        await _send_card(client, chat_id, new_member.user)
         return
     if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
+        if not departure_enabled(chat_id):
+            return
         # No savage farewell for owners or admins — they get a pass.
         if old_status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return
-        await _send_leave(client, chat_member_updated.chat.id, new_member.user)
+        await _send_leave(client, chat_id, new_member.user)

@@ -16,7 +16,33 @@ from pyrogram import Client, filters
 from pyrogram.enums import MessageEntityType, ParseMode
 
 from bot.utils import sudo as sudo_store
-from bot.utils.owner import is_owner, is_sudo
+from bot.utils.owner import get_owner_ids, is_owner, is_sudo
+
+
+async def _owner_denied_text(user_id: int) -> str:
+    owners = await get_owner_ids()
+    if not owners:
+        return (
+            "🔒 This command is owner-only — but no owner is configured.\n\n"
+            f"Set <code>OWNER_ID={user_id}</code> in the bot's .env "
+            "(comma-separated for multiple owners) and restart."
+        )
+    return (
+        "🔒 This command is owner-only.\n\n"
+        f"Your ID: <code>{user_id}</code>\n"
+        f"Configured owner(s): <code>{', '.join(str(i) for i in sorted(owners))}</code>\n\n"
+        "If that should be you, set OWNER_ID in the bot's .env and restart."
+    )
+
+
+async def _sudo_denied_text(user_id: int) -> str:
+    owners = await get_owner_ids()
+    return (
+        "🔒 This command is sudo-only.\n\n"
+        f"Your ID: <code>{user_id}</code>\n"
+        f"Configured owner(s): <code>{', '.join(str(i) for i in sorted(owners)) or '(none)'}</code>\n\n"
+        "Owner can grant access with /addsudo, or set OWNER_ID/SUDO_USERS in .env."
+    )
 
 
 async def _resolve_user(client, message):
@@ -58,8 +84,12 @@ async def _resolve_user(client, message):
 
 @Client.on_message(filters.command("addsudo"))
 async def addsudo_command(client, message):
-    if not message.from_user or not await is_owner(message.from_user.id):
-        await message.reply_text("🔒 /addsudo is owner-only.")
+    if not message.from_user:
+        return
+    if not await is_owner(message.from_user.id):
+        await message.reply_text(
+            await _owner_denied_text(message.from_user.id), parse_mode=ParseMode.HTML
+        )
         return
 
     target_id, mention = await _resolve_user(client, message)
@@ -88,8 +118,12 @@ async def addsudo_command(client, message):
 
 @Client.on_message(filters.command(["delsudo", "removesudo", "rmsudo"]))
 async def delsudo_command(client, message):
-    if not message.from_user or not await is_owner(message.from_user.id):
-        await message.reply_text("🔒 /delsudo is owner-only.")
+    if not message.from_user:
+        return
+    if not await is_owner(message.from_user.id):
+        await message.reply_text(
+            await _owner_denied_text(message.from_user.id), parse_mode=ParseMode.HTML
+        )
         return
 
     target_id, mention = await _resolve_user(client, message)
@@ -114,8 +148,12 @@ async def delsudo_command(client, message):
 
 @Client.on_message(filters.command(["sudolist", "sudoers"]))
 async def sudolist_command(client, message):
-    if not message.from_user or not await is_sudo(message.from_user.id):
-        await message.reply_text("🔒 /sudolist is sudo-only.")
+    if not message.from_user:
+        return
+    if not await is_sudo(message.from_user.id):
+        await message.reply_text(
+            await _sudo_denied_text(message.from_user.id), parse_mode=ParseMode.HTML
+        )
         return
 
     sudoers = sudo_store.all_sudoers()

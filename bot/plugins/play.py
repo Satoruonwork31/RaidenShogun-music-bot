@@ -5,7 +5,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatType
 
 from bot.utils import queue as q
-from bot.utils.playback import play_track
+from bot.utils.playback import ensure_userbot_in_chat, play_track
 from bot.utils.resolver import resolve
 
 logger = logging.getLogger("RaidenShogun.play")
@@ -107,6 +107,14 @@ async def _do_play(client, message, *, is_video: bool):
         await status.edit_text(
             f"➕ Added to queue at position {position}: {info}"
         )
+        return
+
+    # Fresh playback — make sure the assistant userbot is in the group.
+    # It auto-leaves after each session, so we may need to invite it back.
+    await status.edit_text("🤝 Preparing assistant…")
+    ok, detail = await ensure_userbot_in_chat(client, message.chat.id)
+    if not ok:
+        await status.edit_text(f"❌ {detail}")
         return
 
     logger.info("calling play_track for chat=%s title=%r", message.chat.id, info)

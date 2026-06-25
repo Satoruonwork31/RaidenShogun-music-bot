@@ -2,8 +2,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatType
 
 from bot.utils import queue as q
-from bot.utils.music import music
-from bot.utils.playback import play_track
+from bot.utils.playback import end_session, play_track
 
 
 async def _skip(message):
@@ -17,15 +16,12 @@ async def _skip(message):
 
     nxt = q.pop_next(message.chat.id)
     if nxt is None:
-        # Queue exhausted — leave the call cleanly.
-        try:
-            await music.leave_call(message.chat.id)
-        except Exception as exc:
-            await message.reply_text(
-                f"⏭️ Skipped — but leaving the call failed: {exc}"
-            )
-            return
-        await message.reply_text("⏭️ Skipped. Queue is now empty — leaving the call.")
+        # Queue exhausted — end the session and pull the assistant out
+        # of the group, same as a natural stream-end. Anti-misuse.
+        await end_session(message.chat.id)
+        await message.reply_text(
+            "⏭️ Skipped. Queue is empty — assistant has left the group."
+        )
         return
 
     try:

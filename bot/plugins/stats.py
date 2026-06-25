@@ -15,7 +15,7 @@ from pyrogram.enums import ParseMode
 from bot.utils import chats
 from bot.utils import queue as q
 from bot.utils import sudo as sudo_store
-from bot.utils.owner import is_sudo
+from bot.utils.owner import get_owner_ids, is_sudo
 
 logger = logging.getLogger("RaidenShogun.stats")
 
@@ -65,8 +65,17 @@ def _versions() -> dict:
 
 @Client.on_message(filters.command("stats"))
 async def stats_command(client, message):
-    if not message.from_user or not await is_sudo(message.from_user.id):
-        await message.reply_text("🔒 /stats is sudo-only.")
+    if not message.from_user:
+        return
+    if not await is_sudo(message.from_user.id):
+        owners = await get_owner_ids()
+        await message.reply_text(
+            "🔒 /stats is sudo-only.\n\n"
+            f"Your ID: <code>{message.from_user.id}</code>\n"
+            f"Configured owner(s): <code>{', '.join(str(i) for i in sorted(owners)) or '(none)'}</code>\n\n"
+            "Owner can grant access with /addsudo, or set OWNER_ID/SUDO_USERS in .env.",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     all_chats = chats.all_chats()

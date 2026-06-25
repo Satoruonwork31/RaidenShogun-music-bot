@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-24 (queue, playback, /song, /video, /broadcast)
+Last updated: 2026-06-25 (owner gating fixed, /departure toggle, assistant auto-leaves group after VC)
 
 ## Project Overview
 
@@ -102,6 +102,104 @@ See AUDIT_REPORT.md for the prioritized list and severity. High-level:
 - MEDIUM: bot/utils/queue.py is dead code.
 
 ## Fix History
+
+### 2026-06-25 — Owner gating, /departure toggle, assistant anti-misuse
+
+User-reported issues addressed in this pass:
+
+1. `/sudolist /addsudo /removesudo /broadcast /stats` rejected the
+   deployer ("only for sudo users") even though they thought they were
+   the owner.
+2. The departure (member-leave) handler was silent because it was gated
+   by the same on/off flag as the welcome handler — turning greetings
+   off also turned farewells off.
+3. The assistant userbot lingered in groups after playback ended, so it
+   could be misused.
+4. /play in the pyrogram path had no _ensure_userbot_in_chat — the
+   userbot couldn't auto-rejoin after item (3) removed it.
+
+Root cause for (1): `bot/utils/owner.py` fell back to `userbot.get_me().id`
+(the assistant account's ID, not the deployer's) when `OWNER_ID` env was
+unset. The deployer's `.env` had no `OWNER_ID` so the bot considered the
+assistant the owner. Additionally `_env_owner()` only accepted a single
+digit string (`123,456` failed silently).
+
+Files added:
+- bot/utils/departure.py — default-ON per-chat flag, stores the OFF set
+  in $DEPARTURE_OFF_FILE (default ./departure_off.json). Atomic write.
+- bot/plugins/departure.py — `/departure on|off` admin command. Also
+  responds to `/farewell` and `/departures`.
+
+Files rewritten:
+- bot/utils/owner.py
+  - Accepts comma- or whitespace-separated OWNER_ID env var.
+  - New `get_owner_ids() -> set[int]` (back-compat `get_owner_id` kept).
+  - New `SUDO_USERS` env var: comma-list pushed into the persistent sudo
+    store on first sudo check.
+  - Empty-set returned from `get_owner_ids` is NOT cached, so a later
+    successful userbot lookup can repopulate it.
+- bot/plugins/stop.py — uses new `playback.end_session()` helper.
+
+Files edited:
+- bot/plugins/sudo.py — denial messages now include the calling user's
+  id and the configured owner ids, so the user can immediately see who
+  the bot considers an owner.
+- bot/plugins/broadcast.py, bot/plugins/stats.py — same diagnostic
+  denial messages, ParseMode.HTML.
+- bot/plugins/welcome.py — leave handlers now check
+  `departure.is_enabled`; join handlers still check `greetings.is_enabled`.
+- bot/plugins/skip.py — when queue empty, calls `end_session` instead
+  of `music.leave_call` alone.
+- bot/plugins/play.py — before play_track, calls
+  `ensure_userbot_in_chat(client, chat_id)` so the assistant rejoins
+  after a previous session forced it out.
+- bot/plugins/help.py — Welcome & Greetings section now lists
+  `/greetings on|off` (welcomes) and `/departure on|off` (farewells)
+  separately.
+- bot/utils/playback.py — adds:
+  * `end_session(chat_id)` — clears queue, leaves the call,
+    `userbot.leave_chat(chat_id)`. Best-effort, never raises.
+  * `ensure_userbot_in_chat(client_app, chat_id)` — probes
+    `get_chat_member(me)`, falls back to
+    `app.export_chat_invite_link` + `userbot.join_chat`.
+  * `_on_pytgcalls_update` (StreamEnded path) now calls `end_session`
+    instead of bare `leave_call` — natural stream-end now also kicks
+    the assistant out of the group.
+- bot/core/loader.py — added `departure`, `sudo`, `stats` to the
+  explicit PLUGINS list. (pyrofork's auto-loader would pick them up
+  anyway, but the list is the canonical inventory.)
+
+Behaviour notes:
+- Default for departure messages is ON. Existing groups will start
+  seeing farewells immediately on first run; admins can `/departure off`.
+- `/greetings` no longer affects farewells. Existing chats that had
+  greetings ON will continue to receive welcomes; chats with greetings
+  off but who DO want farewells should `/departure on` (no-op since
+  default-ON) and leave greetings off.
+- Assistant auto-leave fires on: natural stream-end with empty queue,
+  `/stop`, `/end`, `/skip` when the next pop is empty. Manual operator
+  action (kicking the assistant from VC mid-stream) is not caught here
+  — py-tgcalls raises NotInGroupCallError on next attempt.
+- For `/play` to auto-invite the assistant back, the BOT must be a
+  group admin with invite-link rights. Otherwise the user has to
+  re-invite the assistant manually each session. The play handler
+  reports a clear error.
+
+Verification performed:
+- `python3 -m py_compile` on every changed file — PASS.
+- Static AST cross-reference (every imported symbol exists in its
+  source module) — PASS.
+- Unit tests:
+  * `_parse_id_list` parses comma, whitespace, mixed, padded, junk.
+  * `OWNER_ID=111,222` → `get_owner_ids() == {111, 222}`,
+    `is_owner(111)` True, `is_owner(333)` False.
+  * `departure.is_enabled(-1001)` defaults True, set_enabled+reload
+    persists, set_enabled(True) restores.
+  * Queue Track lifecycle smoke still PASS.
+
+Verification NOT yet performed:
+- Live Telegram smoke (no creds in sandbox, leaked creds in repo must
+  be rotated first — see CRIT-1 in AUDIT_REPORT.md).
 
 ### 2026-06-24 — Real playback controls + per-chat queue
 
@@ -250,6 +348,14 @@ Verification performed:
 
 ## Session Log
 
+- 2026-06-25: Second pass focused on three user-reported breakages:
+  owner gating (sudo commands rejected the deployer), departures (not
+  firing, conflated with greetings toggle), and assistant lingering
+  in groups after VC. Implemented owner.py multi-id parsing, split
+  /departure from /greetings (default ON), added playback.end_session
+  + ensure_userbot_in_chat helpers, wired auto-leave into /stop /skip
+  and stream-end auto-advance, added auto-rejoin in /play. Static
+  verification only — see Fix History above.
 - 2026-06-24: First pass. Read main.py, bot/start.py, bot/client.py, bot/config.py,
   bot/core/{loader,music}.py, bot/utils/{music,player,resolver,queue,greetings,
   leave_messages}.py, every bot/plugins/*.py, ptb_main.py header, scripts/install.sh.

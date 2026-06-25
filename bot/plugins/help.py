@@ -42,7 +42,8 @@ HELP_PAGES: list[tuple[str, str]] = [
     (
         "General",
         '<emoji id="5816875690183631180">👋</emoji> <b>Welcome &amp; Greetings</b>\n'
-        "• /greetings on|off - Toggle welcome &amp; farewell messages\n\n"
+        "• /greetings on|off - Toggle welcome cards on member join\n"
+        "• /departure on|off - Toggle farewell messages on member leave\n\n"
         '<emoji id="5972061723400605896">🎲</emoji> <b>Fun</b>\n'
         "• /toss - Toss a coin\n\n"
         '<emoji id="5350427505805238170">🆔</emoji> <b>Information</b>\n'
