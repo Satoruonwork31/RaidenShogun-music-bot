@@ -216,20 +216,21 @@ async def _try_url_send(client, chat_id, url, caption, reply_to_id) -> bool:
 
 
 async def _try_local_send(client, chat_id, path, caption, reply_to_id,
-                           label: str) -> bool:
-    """Upload a local file via send_animation. 60s wait_for cap so a
-    bot-client media-DC hang produces a failure, not a leaked task.
+                           label: str, timeout: int = 20) -> bool:
+    """Upload a local file via send_animation, with a forced-cancel
+    timeout so a media-DC hang surfaces fast instead of stalling the
+    user's reply.
     """
     task = asyncio.create_task(client.send_animation(
         chat_id=chat_id, animation=path, caption=caption,
         parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
     ))
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=60)
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         logger.info("pat: %s upload OK", label)
         return True
     except asyncio.TimeoutError:
-        logger.warning("pat: %s upload timed out, cancelling", label)
+        logger.warning("pat: %s upload timed out after %ss, cancelling", label, timeout)
         task.cancel()
         try:
             await task
@@ -274,13 +275,16 @@ async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> b
         except Exception as exc:
             logger.info("pat: userbot.get_chat(%s) failed: %s — userbot may not be in this chat", chat_id, exc)
         if await _try_local_send(_ub, chat_id, local_path, caption, None,
-                                  label="userbot"):
+                                  label="userbot", timeout=15):
             return True
     except Exception:
         logger.exception("pat: userbot path errored")
 
+    # Bot-client fallback. Short timeout (10s) because this path almost
+    # always hangs on this pyrofork+ntgcalls build — we don't want to
+    # make the user wait a minute for a failure we've seen before.
     return await _try_local_send(bot_client, chat_id, local_path, caption,
-                                  reply_to_id, label="bot")
+                                  reply_to_id, label="bot", timeout=10)
 
 
 async def _resolve_target(client, message):
