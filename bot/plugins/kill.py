@@ -32,9 +32,13 @@ from pyrogram.enums import MessageEntityType, ParseMode
 
 logger = logging.getLogger("RaidenShogun.kill")
 
-# Operator-supplied media. Replace the failure URL when the user provides it.
-_SUCCESS_GIF_URL = "https://tmpfiles.org/wlws0Kf74MoM/kirby-meme.mp4"
-_FAILURE_GIF_URL = ""  # TODO(operator): drop in the failure-side GIF URL.
+# Operator-supplied media.
+#   Success → animated MP4 (sent as send_animation)
+#   Failure → still JPG     (sent as send_photo)
+_SUCCESS_MEDIA_URL = "https://tmpfiles.org/wlws0Kf74MoM/kirby-meme.mp4"
+_SUCCESS_KIND = "animation"
+_FAILURE_MEDIA_URL = "https://i.ibb.co/fz8rSyTf/7aa07c2ea06d.jpg"
+_FAILURE_KIND = "photo"
 
 # Premium custom-emoji ids from the spec.
 _EMOJI_FAIL = "6181421239978956035"
@@ -49,8 +53,8 @@ _cache_lock = asyncio.Lock()
 
 def _candidate_urls(url: str) -> list[str]:
     """tmpfiles.org's share URL renders an HTML preview page; the actual
-    media is at /dl/<id>/<name>. Try the share URL first (some Telegram
-    setups follow the redirect cleanly), then fall back to the /dl/ form.
+    media is at /dl/<id>/<name>. Try the share URL first, then fall back
+    to the /dl/ form for tmpfiles links specifically.
     """
     if not url:
         return []
@@ -60,8 +64,20 @@ def _candidate_urls(url: str) -> list[str]:
     return out
 
 
-async def _ensure_gif(url: str) -> Optional[str]:
-    """Resolve a remote GIF URL to a local path. Returns None on failure."""
+def _suffix_for(url: str) -> str:
+    """Best-effort suffix from the URL path. Used only for the temp
+    filename — the actual send method (animation vs photo) is decided
+    by _SUCCESS_KIND / _FAILURE_KIND.
+    """
+    tail = url.rsplit("/", 1)[-1].lower()
+    for ext in (".mp4", ".gif", ".webm", ".jpg", ".jpeg", ".png", ".webp"):
+        if tail.endswith(ext):
+            return ext
+    return ".bin"
+
+
+async def _ensure_media(url: str) -> Optional[str]:
+    """Resolve a remote media URL to a local path. Returns None on failure."""
     if not url:
         return None
 
@@ -77,19 +93,20 @@ async def _ensure_gif(url: str) -> Optional[str]:
                         if resp.status != 200:
                             continue
                         ctype = (resp.headers.get("Content-Type") or "").lower()
-                        # Some hosts mislabel; accept anything that isn't obviously HTML.
                         if "text/html" in ctype:
                             continue
                         data = await resp.read()
-                        if not data or len(data) < 1024:
+                        if not data or len(data) < 512:
                             continue
-                fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kill_gif_")
+                fd, path = tempfile.mkstemp(
+                    suffix=_suffix_for(url), prefix="kill_media_"
+                )
                 with os.fdopen(fd, "wb") as f:
                     f.write(data)
                 _gif_cache[url] = path
                 return path
             except Exception as exc:
-                logger.info("kill gif fetch %s failed: %s", try_url, exc)
+                logger.info("kill media fetch %s failed: %s", try_url, exc)
                 continue
 
         logger.warning("kill: could not fetch any candidate of %r", url)
@@ -168,28 +185,39 @@ async def kill_command(client, message):
             f"{attacker_mention} killed {target_mention}.\n"
             f"Case closed. No second chances."
         )
-        gif_path = await _ensure_gif(_SUCCESS_GIF_URL)
+        media_path = await _ensure_media(_SUCCESS_MEDIA_URL)
+        media_kind = _SUCCESS_KIND
     else:
         text = (
             f'<emoji id="{_EMOJI_FAIL}">⚔️</emoji> '
             f"{attacker_mention} attempted to kill {target_mention}.\n"
             f"The attempt failed. Better luck in another timeline."
         )
-        gif_path = await _ensure_gif(_FAILURE_GIF_URL)
+        media_path = await _ensure_media(_FAILURE_MEDIA_URL)
+        media_kind = _FAILURE_KIND
 
-    if gif_path:
+    if media_path:
         try:
-            await client.send_animation(
-                chat_id=message.chat.id,
-                animation=gif_path,
-                caption=text,
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=message.id,
-            )
+            if media_kind == "animation":
+                await client.send_animation(
+                    chat_id=message.chat.id,
+                    animation=media_path,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=message.id,
+                )
+            else:
+                await client.send_photo(
+                    chat_id=message.chat.id,
+                    photo=media_path,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=message.id,
+                )
             return
         except Exception as exc:
             logger.warning(
-                "kill send_animation failed (%s), falling back to text", exc
+                "kill send_%s failed (%s), falling back to text", media_kind, exc
             )
 
     await message.reply_text(text, parse_mode=ParseMode.HTML)
