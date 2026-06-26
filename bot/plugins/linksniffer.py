@@ -221,8 +221,11 @@ async def link_sniffer(client, message):
             disable_web_page_preview=True,
         )
 
+        # video=True so yt-dlp picks a video format (not bestaudio). Without
+        # this, the resolved info["url"] is the audio stream, which Telegram
+        # then renders as an audio file when send_video[URL] fetches it.
         try:
-            probe = await asyncio.to_thread(_try_extract, url)
+            probe = await asyncio.to_thread(_try_extract, url, None, video=True)
         except YouTubeAuthRequiredError:
             await status.edit_text(YouTubeAuthRequiredError.USER_MESSAGE)
             return

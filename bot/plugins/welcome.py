@@ -151,18 +151,39 @@ async def handle_chat_member_event(bot_client, chat_member_updated, source: str 
     chat_id = chat_member_updated.chat.id
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
+        _chat_member_log.info("classification=JOIN chat=%s user=%s", chat_id, new_member.user.id)
         if not is_enabled(chat_id):
+            _chat_member_log.info("JOIN skipped: greetings.is_enabled(%s)=False", chat_id)
             return
         if new_member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
+            _chat_member_log.info("JOIN skipped: new status is %s (owner/admin)", new_member.status)
             return
-        await _send_card(bot_client, chat_id, new_member.user)
+        _chat_member_log.info("JOIN sending welcome card to chat=%s for user=%s", chat_id, new_member.user.id)
+        try:
+            await _send_card(bot_client, chat_id, new_member.user)
+            _chat_member_log.info("JOIN card sent ok")
+        except Exception:
+            _chat_member_log.exception("JOIN _send_card raised")
         return
     if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
+        _chat_member_log.info("classification=LEAVE chat=%s user=%s", chat_id, new_member.user.id)
         if not departure_enabled(chat_id):
+            _chat_member_log.info("LEAVE skipped: departure.is_enabled(%s)=False", chat_id)
             return
         if old_status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
+            _chat_member_log.info("LEAVE skipped: old status was %s (owner/admin)", old_status)
             return
-        await _send_leave(bot_client, chat_id, new_member.user)
+        _chat_member_log.info("LEAVE sending farewell to chat=%s for user=%s", chat_id, new_member.user.id)
+        try:
+            await _send_leave(bot_client, chat_id, new_member.user)
+            _chat_member_log.info("LEAVE farewell sent ok")
+        except Exception:
+            _chat_member_log.exception("LEAVE _send_leave raised")
+        return
+    _chat_member_log.info(
+        "no classification: old=%s new=%s — not a join or leave transition we care about",
+        old_status, new_member.status,
+    )
 
 
 @Client.on_chat_member_updated()
