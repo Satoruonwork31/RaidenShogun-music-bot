@@ -46,9 +46,24 @@ async def _send_one(client, chat_id: int, *, reply, text_content: str):
     """Returns (sent_message, error_class_name_or_None).
 
     sent_message is the Message we placed; caller will try to pin it.
+
+    For replied-message broadcasts we use `forward_messages(drop_author=True)`
+    rather than `Message.copy()` because copy() routes media through
+    `send_cached_media` WITHOUT passing parse_mode=DISABLED — that re-parses
+    caption_entities and strips premium custom emoji. `forward_messages` is
+    a Telegram-native forward with the sender attribution removed, so entities
+    (including <emoji id="..."> custom emoji) survive byte-for-byte.
     """
     if reply is not None:
-        return await reply.copy(chat_id), None
+        forwarded = await client.forward_messages(
+            chat_id=chat_id,
+            from_chat_id=reply.chat.id,
+            message_ids=reply.id,
+            drop_author=True,
+            disable_notification=True,
+        )
+        result = forwarded[0] if isinstance(forwarded, list) else forwarded
+        return result, None
     return await client.send_message(chat_id, text_content), None
 
 

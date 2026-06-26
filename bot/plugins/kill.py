@@ -1,0 +1,195 @@
+"""/kill — fun 50/50 roleplay command.
+
+Triggers:
+  /kill                  — reply-mode: target is the replied-to user
+  /kill @username
+  /kill <user_id>
+  /kill <text_mention>   — Telegram text-mention entity
+
+Each invocation rolls a 50/50:
+  success → "💀 {attacker} killed {target}. Case closed. ..."   + success.mp4
+  failure → "{attacker} attempted to kill {target}. Better luck …" + fail.mp4
+
+GIFs are downloaded once and cached in /tmp so we don't re-fetch them
+each call. If the GIF can't be downloaded the bot still sends the
+text-only message (graceful degradation).
+
+The two custom-emoji ids are baked into the messages via pyrofork's
+<emoji id="..."> HTML tag; non-premium clients render the fallback
+glyph between the tags (💀 / ⚔️).
+"""
+
+import asyncio
+import logging
+import os
+import random
+import tempfile
+from typing import Optional
+
+import aiohttp
+from pyrogram import Client, filters
+from pyrogram.enums import MessageEntityType, ParseMode
+
+logger = logging.getLogger("RaidenShogun.kill")
+
+# Operator-supplied media. Replace the failure URL when the user provides it.
+_SUCCESS_GIF_URL = "https://tmpfiles.org/wlws0Kf74MoM/kirby-meme.mp4"
+_FAILURE_GIF_URL = ""  # TODO(operator): drop in the failure-side GIF URL.
+
+# Premium custom-emoji ids from the spec.
+_EMOJI_FAIL = "6181421239978956035"
+_EMOJI_KILL = "5352585602317426381"
+
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
+# Cache: source URL -> local path on disk.
+_gif_cache: dict[str, str] = {}
+_cache_lock = asyncio.Lock()
+
+
+def _candidate_urls(url: str) -> list[str]:
+    """tmpfiles.org's share URL renders an HTML preview page; the actual
+    media is at /dl/<id>/<name>. Try the share URL first (some Telegram
+    setups follow the redirect cleanly), then fall back to the /dl/ form.
+    """
+    if not url:
+        return []
+    out = [url]
+    if "tmpfiles.org/" in url and "/dl/" not in url:
+        out.append(url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1))
+    return out
+
+
+async def _ensure_gif(url: str) -> Optional[str]:
+    """Resolve a remote GIF URL to a local path. Returns None on failure."""
+    if not url:
+        return None
+
+    async with _cache_lock:
+        cached = _gif_cache.get(url)
+        if cached and os.path.exists(cached):
+            return cached
+
+        for try_url in _candidate_urls(url):
+            try:
+                async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as s:
+                    async with s.get(try_url, allow_redirects=True) as resp:
+                        if resp.status != 200:
+                            continue
+                        ctype = (resp.headers.get("Content-Type") or "").lower()
+                        # Some hosts mislabel; accept anything that isn't obviously HTML.
+                        if "text/html" in ctype:
+                            continue
+                        data = await resp.read()
+                        if not data or len(data) < 1024:
+                            continue
+                fd, path = tempfile.mkstemp(suffix=".mp4", prefix="kill_gif_")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                _gif_cache[url] = path
+                return path
+            except Exception as exc:
+                logger.info("kill gif fetch %s failed: %s", try_url, exc)
+                continue
+
+        logger.warning("kill: could not fetch any candidate of %r", url)
+        return None
+
+
+async def _resolve_target(client, message):
+    """Return (user, mention_html) for the /kill target, or (None, None)."""
+    for ent in (message.entities or []):
+        if ent.type == MessageEntityType.TEXT_MENTION and ent.user:
+            return ent.user, ent.user.mention
+
+    reply = message.reply_to_message
+    if reply and reply.from_user:
+        return reply.from_user, reply.from_user.mention
+
+    if len(message.command) < 2:
+        return None, None
+
+    raw = message.command[1].lstrip("@")
+    from bot.client import userbot
+    try:
+        if raw.isdigit():
+            u = await client.get_users(int(raw))
+        else:
+            try:
+                u = await userbot.get_users(raw)
+            except Exception:
+                u = await client.get_users(raw)
+        return u, u.mention
+    except Exception:
+        if raw.isdigit():
+            uid = int(raw)
+            return None, f'<a href="tg://user?id={uid}">user {uid}</a>'
+        return None, None
+
+
+def _attacker_mention(message) -> str:
+    user = message.from_user
+    if not user:
+        return "someone"
+    return user.mention or (user.first_name or str(user.id))
+
+
+@Client.on_message(filters.command(["kill", "murder"]))
+async def kill_command(client, message):
+    target, target_mention = await _resolve_target(client, message)
+    if target_mention is None:
+        await message.reply_text(
+            "🗡 Usage:\n"
+            "• Reply to a user's message with `/kill`\n"
+            "• `/kill <user_id>`\n"
+            "• `/kill @username`"
+        )
+        return
+
+    attacker_mention = _attacker_mention(message)
+
+    # Optional self-protection: the bot itself can never die.
+    target_is_self = bool(target and target.is_self)
+    if target_is_self:
+        await message.reply_text(
+            f'<emoji id="{_EMOJI_FAIL}">⚔️</emoji> '
+            f"{attacker_mention} attempted to kill the bot. "
+            f"The attempt failed. The Shogun is eternal. ⚡",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # 50/50.
+    success = random.random() < 0.5
+
+    if success:
+        text = (
+            f'<emoji id="{_EMOJI_KILL}">💀</emoji> '
+            f"{attacker_mention} killed {target_mention}.\n"
+            f"Case closed. No second chances."
+        )
+        gif_path = await _ensure_gif(_SUCCESS_GIF_URL)
+    else:
+        text = (
+            f'<emoji id="{_EMOJI_FAIL}">⚔️</emoji> '
+            f"{attacker_mention} attempted to kill {target_mention}.\n"
+            f"The attempt failed. Better luck in another timeline."
+        )
+        gif_path = await _ensure_gif(_FAILURE_GIF_URL)
+
+    if gif_path:
+        try:
+            await client.send_animation(
+                chat_id=message.chat.id,
+                animation=gif_path,
+                caption=text,
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=message.id,
+            )
+            return
+        except Exception as exc:
+            logger.warning(
+                "kill send_animation failed (%s), falling back to text", exc
+            )
+
+    await message.reply_text(text, parse_mode=ParseMode.HTML)

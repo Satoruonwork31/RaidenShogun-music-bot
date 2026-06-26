@@ -25,6 +25,8 @@ PLUGINS = [
     "stats",
     "sudo",
     "playback_buttons",
+    "linksniffer",
+    "kill",
 ]
 
 def load_plugins():
