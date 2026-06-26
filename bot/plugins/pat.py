@@ -21,12 +21,19 @@ Captions 1-5 are the original text-only set. Captions 6-10 add GIFs.
 
 import asyncio
 import logging
+import os
 import random
+import tempfile
 
+import aiohttp
 from pyrogram import Client, filters
 from pyrogram.enums import MessageEntityType, ParseMode
 
 logger = logging.getLogger("RaidenShogun.pat")
+
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+_gif_path_cache: dict[str, str] = {}
+_gif_cache_lock = asyncio.Lock()
 
 # Single fallback glyph for every <emoji id=...> tag. Non-premium clients
 # see this; premium clients see the animated custom emoji.
@@ -147,27 +154,113 @@ def _candidate_urls(url: str) -> list[str]:
     return out
 
 
-async def _send_animation_url(client, chat_id, gif_url, caption, reply_to_id) -> bool:
-    """Try send_animation with a remote URL. Returns True on success."""
-    for try_url in _candidate_urls(gif_url):
+async def _download_gif(url: str) -> str | None:
+    """Download a GIF to /tmp once and cache the local path."""
+    async with _gif_cache_lock:
+        cached = _gif_path_cache.get(url)
+        if cached and os.path.exists(cached):
+            return cached
+        for try_url in _candidate_urls(url):
+            try:
+                async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as s:
+                    async with s.get(try_url, allow_redirects=True) as resp:
+                        if resp.status != 200:
+                            continue
+                        ctype = (resp.headers.get("Content-Type") or "").lower()
+                        if "text/html" in ctype:
+                            continue
+                        data = await resp.read()
+                        if not data or len(data) < 512:
+                            continue
+                fd, path = tempfile.mkstemp(suffix=".mp4", prefix="pat_gif_")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                _gif_path_cache[url] = path
+                logger.info("pat: cached %s → %s (%d bytes)", url, path, len(data))
+                return path
+            except Exception as exc:
+                logger.info("pat: download %s failed: %s", try_url, exc)
+        return None
+
+
+async def _try_url_send(client, chat_id, url, caption, reply_to_id) -> bool:
+    """Attempt URL-direct send_animation (Telegram fetches the URL).
+    Cheapest path; fails fast with WEBPAGE_CURL_FAILED for hosts Telegram
+    can't reach (tmpfiles.org returns that). 15s wait_for cap.
+    """
+    for try_url in _candidate_urls(url):
         try:
             await asyncio.wait_for(
                 client.send_animation(
-                    chat_id=chat_id,
-                    animation=try_url,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=reply_to_id,
+                    chat_id=chat_id, animation=try_url, caption=caption,
+                    parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
                 ),
-                timeout=_SEND_TIMEOUT,
+                timeout=15,
             )
-            logger.info("pat: send_animation OK via %s", try_url)
+            logger.info("pat: URL send OK via %s", try_url)
             return True
         except asyncio.TimeoutError:
-            logger.warning("pat: send_animation timed out for %s", try_url)
-        except Exception:
-            logger.exception("pat: send_animation raised for %s", try_url)
+            logger.warning("pat: URL send timed out for %s", try_url)
+        except Exception as exc:
+            logger.info("pat: URL send failed for %s: %s", try_url, type(exc).__name__)
     return False
+
+
+async def _try_local_send(client, chat_id, path, caption, reply_to_id,
+                           label: str) -> bool:
+    """Upload a local file via send_animation. 60s wait_for cap so a
+    bot-client media-DC hang produces a failure, not a leaked task.
+    """
+    task = asyncio.create_task(client.send_animation(
+        chat_id=chat_id, animation=path, caption=caption,
+        parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
+    ))
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=60)
+        logger.info("pat: %s upload OK", label)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("pat: %s upload timed out, cancelling", label)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        return False
+    except Exception as exc:
+        logger.info("pat: %s upload failed: %s", label, type(exc).__name__)
+        return False
+
+
+async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> bool:
+    """Send the GIF via the best available path. Returns True on success.
+
+    Order:
+      1. URL-direct via bot client. Skipped for tmpfiles.org because it
+         consistently returns WEBPAGE_CURL_FAILED.
+      2. Download once, upload via userbot (works in chats where the
+         assistant userbot is a member).
+      3. Download once, upload via bot client (subject to the
+         pyrofork+ntgcalls bot-client media-DC hang).
+    """
+    if "tmpfiles.org" not in gif_url:
+        if await _try_url_send(bot_client, chat_id, gif_url, caption, reply_to_id):
+            return True
+
+    local_path = await _download_gif(gif_url)
+    if not local_path:
+        return False
+
+    try:
+        from bot.client import userbot as _ub
+        if await _try_local_send(_ub, chat_id, local_path, caption, None,
+                                  label="userbot"):
+            return True
+    except Exception:
+        logger.exception("pat: userbot path errored")
+
+    return await _try_local_send(bot_client, chat_id, local_path, caption,
+                                  reply_to_id, label="bot")
 
 
 async def _resolve_target(client, message):
@@ -250,12 +343,10 @@ async def pat_command(client, message):
     gif_url = random.choice(_GIFS)
     text = _render(template, emoji_ids, attacker_mention, target_mention)
 
-    ok = await _send_animation_url(
-        client, message.chat.id, gif_url, text, message.id
-    )
+    ok = await _send_pat_gif(client, message.chat.id, gif_url, text, message.id)
     if ok:
         return
-    logger.info("pat: gif send failed, falling back to text")
+    logger.info("pat: gif send failed across all paths, falling back to text")
 
     try:
         await message.reply_text(
