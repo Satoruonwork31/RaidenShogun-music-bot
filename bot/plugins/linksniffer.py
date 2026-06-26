@@ -65,24 +65,29 @@ def _seen_recently(chat_id: int, url: str) -> bool:
     return False
 
 
-# Run AFTER command handlers (group=0) and AFTER the broadcast chat tracker
-# (group=-1). group=2 means: command plugins win first, this fires only if
-# nobody else consumed the event. The `~filters.command(...)` guard belt-and-
-# braces against /play <url> double-processing.
-@Client.on_message(
-    (filters.text | filters.caption)
-    & ~filters.via_bot
-    & ~filters.command(["play", "vplay", "cplay", "song", "video", "broadcast"]),
-    group=2,
-)
+# Wide filter on purpose. The earlier compound filter
+#   (filters.text | filters.caption) & ~filters.via_bot & ~filters.command([...])
+# was silently rejecting messages — pyrofork was loading the handler but
+# never dispatching to it on plain URL pastes. Drop the filter to bare
+# text-or-caption and do every other check inside the function body so
+# the path is easy to trace from the log.
+@Client.on_message(filters.text | filters.caption, group=2)
 async def link_sniffer(client, message):
-    # Defensive — bots/services shouldn't trigger us.
+    text_raw = str(message.text or message.caption or "")
+    logger.info(
+        "link_sniffer entered chat=%s user=%s text_head=%r",
+        message.chat.id if message.chat else None,
+        message.from_user.id if message.from_user else None,
+        text_raw[:60],
+    )
+
+    # Bots/services shouldn't trigger us, neither should empty text or our
+    # own commands (avoid /play <url> double-processing).
     if message.from_user and message.from_user.is_bot:
         return
-
-    text = str(message.text or message.caption or "")
-    if not text or text.lstrip().startswith("/"):
+    if not text_raw or text_raw.lstrip().startswith("/"):
         return
+    text = text_raw
 
     match = _URL_RE.search(text)
     if not match:
@@ -129,16 +134,48 @@ async def link_sniffer(client, message):
         # the thumb entirely; Telegram will autogenerate from the video.
         # (If you ever want one, aiohttp-download it first to a tmp path.)
         await status.edit_text(f"📤 Uploading: {title}")
-        await client.send_video(
-            chat_id=chat_id,
-            video=path,
-            caption=title[:1024],
-            duration=duration,
-            width=width,
-            height=height,
-            supports_streaming=True,
-            reply_to_message_id=message.id,
-        )
+        # Hard timeout — pyrofork's send_video on the bot client has been
+        # observed hanging indefinitely on this build. wait_for converts
+        # the hang into TimeoutError so we surface a clear failure instead
+        # of leaving the user staring at "Uploading…" forever.
+        logger.info("link_sniffer: starting send_video for %s", path)
+        try:
+            await asyncio.wait_for(
+                client.send_video(
+                    chat_id=chat_id,
+                    video=path,
+                    caption=title[:1024],
+                    duration=duration,
+                    width=width,
+                    height=height,
+                    supports_streaming=True,
+                    reply_to_message_id=message.id,
+                ),
+                timeout=120,
+            )
+            logger.info("link_sniffer: send_video OK for %s", path)
+        except asyncio.TimeoutError:
+            logger.warning("link_sniffer: send_video timed out after 120s")
+            # Fallback: try send_document (different code path inside pyrofork)
+            try:
+                logger.info("link_sniffer: trying send_document fallback")
+                await asyncio.wait_for(
+                    client.send_document(
+                        chat_id=chat_id,
+                        document=path,
+                        caption=title[:1024],
+                        reply_to_message_id=message.id,
+                    ),
+                    timeout=120,
+                )
+                logger.info("link_sniffer: send_document OK")
+            except Exception:
+                logger.exception("link_sniffer: send_document fallback also failed")
+                await status.edit_text(
+                    f"❌ Downloaded but Telegram upload timed out twice.\n"
+                    f"Title: {title}"
+                )
+                return
         try:
             await status.delete()
         except Exception:
