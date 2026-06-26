@@ -38,15 +38,18 @@ _FALLBACK = "🤚"
 _SEND_TIMEOUT = 25
 
 
-# Each entry: (emoji_ids, template, gif_url_or_None)
-# Templates use {e0}, {e1}, ... in the order emojis appear in the line.
+# Captions and GIFs are sampled INDEPENDENTLY per /pat call, so every
+# caption can ride any GIF (10 × 6 = 60 distinct caption+gif pairings).
+# To add a caption or a GIF, drop it into the matching pool below.
+
+# Each entry: (emoji_ids, template). Templates use {e0}, {e1}, ... in
+# the order emojis appear in the line.
 _CAPTIONS = [
     # ── Caption 1 ──
     (
         ["5386414139130260061", "4956436416142771580"],
         "{e0} {e1} {user1} gently headpats {user2}.\n\n"
         "A tiny moment of peace in the middle of the chaos.",
-        None,
     ),
     # ── Caption 2 ──
     (
@@ -54,21 +57,18 @@ _CAPTIONS = [
         "{e0} {user1} gives {user2} a soft headpat.\n\n"
         "+10 Comfort\n"
         "+100 Serotonin.",
-        None,
     ),
     # ── Caption 3 ──
     (
         ["5911493248483859403"],
         "{e0} {user1} reaches over and headpats {user2}.\n\n"
         "Mission accomplished: Emotional support delivered.",
-        None,
     ),
     # ── Caption 4 ──
     (
         ["5222179653497670288"],
         "{e0} {user1} headpats {user2}.\n\n"
         "A rare gesture. Handle with care.",
-        None,
     ),
     # ── Caption 5 ──
     (
@@ -76,14 +76,12 @@ _CAPTIONS = [
         "{e0} {user1} gently pats {user2}'s head.\n\n"
         "Achievement Unlocked:\n"
         "Certified Comfort Provider.",
-        None,
     ),
     # ── Caption 6 ──
     (
         ["5818719339255176305", "5962830584551052132", "4958577444454925201"],
         "{e0} {e1} {user1} gently headpats {user2}.\n\n"
         "\"You're doing better than you think.\" {e2}",
-        "https://tmpfiles.org/wlwt01UyeFY0/kobayashi-dragon.mp4",
     ),
     # ── Caption 7 ──
     (
@@ -91,7 +89,6 @@ _CAPTIONS = [
          "5341695605364244563", "6181428412574339821"],
         "{e0} {e1} {user1} softly pats {user2}'s head.\n\n"
         "For just a moment, the world feels a little lighter. {e2} {e3}",
-        "https://tmpfiles.org/wZwA0GUlffqV/senpai-ga-uzai-kouhai-no-hanashi-futaba.mp4",
     ),
     # ── Caption 8 ──
     (
@@ -100,7 +97,6 @@ _CAPTIONS = [
         "{e0} {e1} {user1} gives {user2} a warm headpat.\n\n"
         "+1 Happy Thought {e2}\n"
         "+1 Safe Feeling {e3}",
-        "https://tmpfiles.org/wuwJ0SUxfnck/spy-x-family-anya-forger.mp4",
     ),
     # ── Caption 9 ──
     (
@@ -108,7 +104,6 @@ _CAPTIONS = [
          "5215226264654213464", "4956468890390496140"],
         "{e0} {e1} {user1} carefully headpats {user2}.\n\n"
         "No words needed. Just a quiet reminder that someone cares. {e2} {e3}",
-        "https://tmpfiles.org/wKwd0EULgca0/fern-headpats-stark-fern.mp4",
     ),
     # ── Caption 10 ──
     (
@@ -117,11 +112,17 @@ _CAPTIONS = [
         "{e0} {e1} {user1} gives {user2} the gentlest headpat imaginable.\n\n"
         "May your worries shrink, your smile grow, and your day become a "
         "little brighter. {e2} {e3}",
-        "https://tmpfiles.org/wVwb0LL7j0bL/sakuta-azusagawa-mai-sakurajima.mp4",
     ),
-    # The 6th supplied gif URL (gawr-gura-head-pat.mp4) is currently
-    # unassigned. Tell the operator which caption to attach it to and
-    # add a new entry referencing it.
+]
+
+# All 6 operator-supplied GIFs; picked uniformly at random per /pat call.
+_GIFS = [
+    "https://tmpfiles.org/wlwt01UyeFY0/kobayashi-dragon.mp4",
+    "https://tmpfiles.org/wZwA0GUlffqV/senpai-ga-uzai-kouhai-no-hanashi-futaba.mp4",
+    "https://tmpfiles.org/wuwJ0SUxfnck/spy-x-family-anya-forger.mp4",
+    "https://tmpfiles.org/wKwd0EULgca0/fern-headpats-stark-fern.mp4",
+    "https://tmpfiles.org/wVwb0LL7j0bL/sakuta-azusagawa-mai-sakurajima.mp4",
+    "https://tmpfiles.org/wRwS0yL2v9Q7/gawr-gura-head-pat.mp4",
 ]
 
 
@@ -245,17 +246,16 @@ async def pat_command(client, message):
         )
         return
 
-    emoji_ids, template, gif_url = random.choice(_CAPTIONS)
+    emoji_ids, template = random.choice(_CAPTIONS)
+    gif_url = random.choice(_GIFS)
     text = _render(template, emoji_ids, attacker_mention, target_mention)
 
-    if gif_url:
-        ok = await _send_animation_url(
-            client, message.chat.id, gif_url, text, message.id
-        )
-        if ok:
-            return
-        # Fall through to text-only if the gif send failed.
-        logger.info("pat: gif send failed, falling back to text")
+    ok = await _send_animation_url(
+        client, message.chat.id, gif_url, text, message.id
+    )
+    if ok:
+        return
+    logger.info("pat: gif send failed, falling back to text")
 
     try:
         await message.reply_text(
