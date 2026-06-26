@@ -64,12 +64,54 @@ async def _attempt(label, coro, timeout=60):
         return False
 
 
+def _pick_direct_url(info):
+    """Pull a direct CDN URL out of yt-dlp's info dict, if available.
+
+    For Instagram reels yt-dlp returns the resolved video URL straight on
+    `info["url"]`. For multi-format sources (YouTube, etc.) the same data
+    lives inside the `formats` list — take the last MP4-ish entry as a
+    reasonable "best".
+    """
+    if not isinstance(info, dict):
+        return None
+    direct = info.get("url")
+    if isinstance(direct, str) and direct.startswith("http"):
+        return direct
+    formats = info.get("formats")
+    if isinstance(formats, list):
+        for fmt in reversed(formats):
+            if not isinstance(fmt, dict):
+                continue
+            if fmt.get("vcodec") == "none":
+                continue
+            u = fmt.get("url")
+            if isinstance(u, str) and u.startswith("http"):
+                return u
+    return None
+
+
 async def _try_uploads(bot_client, chat_id, reply_to_id, path, title,
-                       duration, width, height):
-    """Try multiple upload code paths. Returns True on success."""
-    # Path 1: bot client send_video
+                       duration, width, height, direct_url=None):
+    """Try multiple upload code paths. Returns True on success.
+
+    Order matters: the URL-based bot.send_video does not require a
+    bot-side upload at all (Telegram fetches the URL server-side), so it
+    sidesteps the documented bot.send_video hang on this pyrofork build.
+    """
+    # Path 0: bot.send_video with a remote URL. Cheapest path — no upload.
+    if direct_url:
+        if await _attempt(
+            "bot.send_video[URL]",
+            bot_client.send_video(
+                chat_id=chat_id, video=direct_url, caption=title[:1024],
+                duration=duration, width=width, height=height,
+                supports_streaming=True, reply_to_message_id=reply_to_id,
+            ),
+        ):
+            return True
+    # Path 1: bot client send_video — local upload (often hangs).
     if await _attempt(
-        "bot.send_video",
+        "bot.send_video[FILE]",
         bot_client.send_video(
             chat_id=chat_id, video=path, caption=title[:1024],
             duration=duration, width=width, height=height,
@@ -77,7 +119,7 @@ async def _try_uploads(bot_client, chat_id, reply_to_id, path, title,
         ),
     ):
         return True
-    # Path 2: bot client send_document (different code path internally)
+    # Path 2: bot client send_document (different code path internally).
     if await _attempt(
         "bot.send_document",
         bot_client.send_document(
@@ -87,8 +129,8 @@ async def _try_uploads(bot_client, chat_id, reply_to_id, path, title,
     ):
         return True
     # Path 3: userbot client send_video — the assistant userbot account
-    # doesn't share the bot-client hang. If it's a member of this chat
-    # it can post. (DMs to the bot can't be reached this way.)
+    # doesn't share the bot-client hang. Works only if the userbot is
+    # already a member of this chat (otherwise resolve_peer KeyError's).
     try:
         from bot.client import userbot as _ub
         if await _attempt(
@@ -200,9 +242,14 @@ async def link_sniffer(client, message):
         # the thumb entirely; Telegram will autogenerate from the video.
         # (If you ever want one, aiohttp-download it first to a tmp path.)
         await status.edit_text(f"📤 Uploading: {title}")
-        logger.info("link_sniffer: starting upload for %s (%s)", path, title)
+        direct_url = _pick_direct_url(probe) or _pick_direct_url(info)
+        logger.info(
+            "link_sniffer: starting upload path=%s title=%r direct_url=%s",
+            path, title, "yes" if direct_url else "no",
+        )
         sent_ok = await _try_uploads(client, chat_id, message.id, path, title,
-                                     duration, width, height)
+                                     duration, width, height,
+                                     direct_url=direct_url)
         if not sent_ok:
             await status.edit_text(
                 f"❌ Downloaded but Telegram upload kept timing out.\n"
