@@ -124,8 +124,10 @@ async def link_sniffer(client, message):
         duration = int((info or {}).get("duration") or 0)
         width = int((info or {}).get("width") or 0)
         height = int((info or {}).get("height") or 0)
-        thumb = (info or {}).get("thumbnail") if isinstance(info, dict) else None
-
+        # yt-dlp gives `thumbnail` as a remote URL — pyrofork's send_video
+        # tries to open that as a LOCAL path and FileNotFoundError's. Drop
+        # the thumb entirely; Telegram will autogenerate from the video.
+        # (If you ever want one, aiohttp-download it first to a tmp path.)
         await status.edit_text(f"📤 Uploading: {title}")
         await client.send_video(
             chat_id=chat_id,
@@ -134,7 +136,6 @@ async def link_sniffer(client, message):
             duration=duration,
             width=width,
             height=height,
-            thumb=thumb,
             supports_streaming=True,
             reply_to_message_id=message.id,
         )

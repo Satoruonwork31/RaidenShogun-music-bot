@@ -204,7 +204,7 @@ async def broadcast_command(client, message):
             await asyncio.sleep(wait + 1)
             try:
                 bcast, _ = await _send_one(
-                    client, chat_id, reply=reply, text_content=text_content
+                    client, chat_id, reply=reply, body=body_text, body_entities=body_entities
                 )
                 sent += 1
                 if await _maybe_pin(client, bcast):

@@ -231,7 +231,7 @@ async def kill_command(client, message):
                 continue
             logger.info("kill: send attempt=%s via %s", attempt, media_kind)
             if media_kind == "animation":
-                await client.send_animation(
+                coro = client.send_animation(
                     chat_id=message.chat.id,
                     animation=payload,
                     caption=text,
@@ -239,15 +239,23 @@ async def kill_command(client, message):
                     reply_to_message_id=message.id,
                 )
             else:
-                await client.send_photo(
+                coro = client.send_photo(
                     chat_id=message.chat.id,
                     photo=payload,
                     caption=text,
                     parse_mode=ParseMode.HTML,
                     reply_to_message_id=message.id,
                 )
+            # Hard timeout: pyrofork's media-DC upload path has hung
+            # indefinitely on this bot in earlier runs, swallowing the
+            # caller. wait_for converts the hang into TimeoutError so we
+            # can fall through to the next attempt instead of leaking
+            # the handler task.
+            await asyncio.wait_for(coro, timeout=25)
             sent = True
             logger.info("kill: media sent OK via %s", attempt)
+        except asyncio.TimeoutError:
+            logger.warning("kill: send via %s timed out after 25s", attempt)
         except Exception:
             logger.exception("kill: send via %s failed", attempt)
 
