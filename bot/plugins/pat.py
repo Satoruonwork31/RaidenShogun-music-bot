@@ -253,6 +253,17 @@ async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> b
 
     try:
         from bot.client import userbot as _ub
+        # Prime the userbot peer cache. Without this, the FIRST
+        # send_animation call for a previously-unseen chat raises
+        # KeyError 'ID not found: <chat>' (pyrofork's resolve_peer lookup
+        # only knows chats it's seen updates for during the session).
+        # get_chat populates the cache, so the actual send below works
+        # on the first attempt instead of having to wait for some
+        # unrelated update to warm it.
+        try:
+            await _ub.get_chat(chat_id)
+        except Exception as exc:
+            logger.info("pat: userbot.get_chat(%s) failed: %s — userbot may not be in this chat", chat_id, exc)
         if await _try_local_send(_ub, chat_id, local_path, caption, None,
                                   label="userbot"):
             return True
