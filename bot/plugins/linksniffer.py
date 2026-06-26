@@ -39,6 +39,72 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+async def _attempt(label, coro, timeout=60):
+    """Run an upload coroutine with a forced cancellation timeout.
+
+    asyncio.wait_for occasionally hasn't been firing on this pyrofork
+    build's hung media-DC handshake — we wrap it in a task explicitly,
+    schedule a cancel, and await the result so the cancel is honoured.
+    """
+    task = asyncio.create_task(coro)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        logger.info("link_sniffer: %s OK", label)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("link_sniffer: %s timed out after %ss, cancelling", label, timeout)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        return False
+    except Exception:
+        logger.exception("link_sniffer: %s raised", label)
+        return False
+
+
+async def _try_uploads(bot_client, chat_id, reply_to_id, path, title,
+                       duration, width, height):
+    """Try multiple upload code paths. Returns True on success."""
+    # Path 1: bot client send_video
+    if await _attempt(
+        "bot.send_video",
+        bot_client.send_video(
+            chat_id=chat_id, video=path, caption=title[:1024],
+            duration=duration, width=width, height=height,
+            supports_streaming=True, reply_to_message_id=reply_to_id,
+        ),
+    ):
+        return True
+    # Path 2: bot client send_document (different code path internally)
+    if await _attempt(
+        "bot.send_document",
+        bot_client.send_document(
+            chat_id=chat_id, document=path, caption=title[:1024],
+            reply_to_message_id=reply_to_id,
+        ),
+    ):
+        return True
+    # Path 3: userbot client send_video — the assistant userbot account
+    # doesn't share the bot-client hang. If it's a member of this chat
+    # it can post. (DMs to the bot can't be reached this way.)
+    try:
+        from bot.client import userbot as _ub
+        if await _attempt(
+            "userbot.send_video",
+            _ub.send_video(
+                chat_id=chat_id, video=path, caption=title[:1024],
+                duration=duration, width=width, height=height,
+                supports_streaming=True,
+            ),
+        ):
+            return True
+    except Exception:
+        logger.exception("link_sniffer: userbot path errored")
+    return False
+
+
 # Per-chat URL-recently-seen set. Trimmed to RECENT_CAP entries each.
 _RECENT: dict[int, list[str]] = {}
 _RECENT_CAP = 30
@@ -134,48 +200,15 @@ async def link_sniffer(client, message):
         # the thumb entirely; Telegram will autogenerate from the video.
         # (If you ever want one, aiohttp-download it first to a tmp path.)
         await status.edit_text(f"📤 Uploading: {title}")
-        # Hard timeout — pyrofork's send_video on the bot client has been
-        # observed hanging indefinitely on this build. wait_for converts
-        # the hang into TimeoutError so we surface a clear failure instead
-        # of leaving the user staring at "Uploading…" forever.
-        logger.info("link_sniffer: starting send_video for %s", path)
-        try:
-            await asyncio.wait_for(
-                client.send_video(
-                    chat_id=chat_id,
-                    video=path,
-                    caption=title[:1024],
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    supports_streaming=True,
-                    reply_to_message_id=message.id,
-                ),
-                timeout=120,
+        logger.info("link_sniffer: starting upload for %s (%s)", path, title)
+        sent_ok = await _try_uploads(client, chat_id, message.id, path, title,
+                                     duration, width, height)
+        if not sent_ok:
+            await status.edit_text(
+                f"❌ Downloaded but Telegram upload kept timing out.\n"
+                f"Title: {title}"
             )
-            logger.info("link_sniffer: send_video OK for %s", path)
-        except asyncio.TimeoutError:
-            logger.warning("link_sniffer: send_video timed out after 120s")
-            # Fallback: try send_document (different code path inside pyrofork)
-            try:
-                logger.info("link_sniffer: trying send_document fallback")
-                await asyncio.wait_for(
-                    client.send_document(
-                        chat_id=chat_id,
-                        document=path,
-                        caption=title[:1024],
-                        reply_to_message_id=message.id,
-                    ),
-                    timeout=120,
-                )
-                logger.info("link_sniffer: send_document OK")
-            except Exception:
-                logger.exception("link_sniffer: send_document fallback also failed")
-                await status.edit_text(
-                    f"❌ Downloaded but Telegram upload timed out twice.\n"
-                    f"Title: {title}"
-                )
-                return
+            return
         try:
             await status.delete()
         except Exception:

@@ -117,6 +117,15 @@ async def leave_legacy(client, message):
 @Client.on_chat_member_updated()
 async def welcome_via_chat_member(client, chat_member_updated):
     """Modern path used by supergroups — fires on member status changes."""
+    import logging as _logging
+    _log = _logging.getLogger("RaidenShogun.welcome")
+    _log.info(
+        "chat_member_updated chat=%s new_status=%s old_status=%s user=%s",
+        chat_member_updated.chat.id if chat_member_updated.chat else None,
+        chat_member_updated.new_chat_member.status if chat_member_updated.new_chat_member else None,
+        chat_member_updated.old_chat_member.status if chat_member_updated.old_chat_member else None,
+        chat_member_updated.new_chat_member.user.id if (chat_member_updated.new_chat_member and chat_member_updated.new_chat_member.user) else None,
+    )
     if chat_member_updated.chat is None:
         return
     new_member = chat_member_updated.new_chat_member
