@@ -153,7 +153,20 @@ def _attacker_mention(message) -> str:
 
 @Client.on_message(filters.command(["kill", "murder"]))
 async def kill_command(client, message):
-    target, target_mention = await _resolve_target(client, message)
+    logger.info(
+        "kill_command fired in chat=%s by user=%s reply=%s args=%s",
+        message.chat.id if message.chat else None,
+        message.from_user.id if message.from_user else None,
+        bool(message.reply_to_message),
+        message.command[1:] if message.command else [],
+    )
+    try:
+        target, target_mention = await _resolve_target(client, message)
+    except Exception:
+        logger.exception("kill: _resolve_target raised")
+        await message.reply_text("🗡 Couldn't resolve the target — try a different form.")
+        return
+    logger.info("kill: target=%s mention=%r", target.id if target else None, target_mention)
     if target_mention is None:
         await message.reply_text(
             "🗡 Usage:\n"
@@ -178,6 +191,7 @@ async def kill_command(client, message):
 
     # 50/50.
     success = random.random() < 0.5
+    logger.info("kill: roll=%s", "SUCCESS" if success else "FAILURE")
 
     if success:
         text = (
@@ -196,12 +210,30 @@ async def kill_command(client, message):
         media_path = await _ensure_media(_FAILURE_MEDIA_URL)
         media_kind = _FAILURE_KIND
 
-    if media_path:
+    # Prefer URL-based send: Telegram fetches the media server-side so we
+    # don't have to upload chunks via the bot's media DC (that path hangs
+    # for the bot client in this pyrofork+ntgcalls build — confirmed by
+    # log gaps with no completion or exception). If the URL send fails or
+    # times out, fall back to the local-file upload, then to text-only.
+    success_url, success_kind = _SUCCESS_MEDIA_URL, _SUCCESS_KIND
+    failure_url, failure_kind = _FAILURE_MEDIA_URL, _FAILURE_KIND
+    chosen_url = success_url if success else failure_url
+    # tmpfiles.org needs /dl/ for direct media; ibb.co URLs are already direct.
+    chosen_url = _candidate_urls(chosen_url)[-1]
+
+    sent = False
+    for attempt in ("url", "file"):
+        if sent:
+            break
         try:
+            payload = chosen_url if attempt == "url" else media_path
+            if not payload:
+                continue
+            logger.info("kill: send attempt=%s via %s", attempt, media_kind)
             if media_kind == "animation":
                 await client.send_animation(
                     chat_id=message.chat.id,
-                    animation=media_path,
+                    animation=payload,
                     caption=text,
                     parse_mode=ParseMode.HTML,
                     reply_to_message_id=message.id,
@@ -209,15 +241,21 @@ async def kill_command(client, message):
             else:
                 await client.send_photo(
                     chat_id=message.chat.id,
-                    photo=media_path,
+                    photo=payload,
                     caption=text,
                     parse_mode=ParseMode.HTML,
                     reply_to_message_id=message.id,
                 )
-            return
-        except Exception as exc:
-            logger.warning(
-                "kill send_%s failed (%s), falling back to text", media_kind, exc
-            )
+            sent = True
+            logger.info("kill: media sent OK via %s", attempt)
+        except Exception:
+            logger.exception("kill: send via %s failed", attempt)
 
-    await message.reply_text(text, parse_mode=ParseMode.HTML)
+    if sent:
+        return
+
+    try:
+        await message.reply_text(text, parse_mode=ParseMode.HTML)
+        logger.info("kill: text-fallback sent OK")
+    except Exception:
+        logger.exception("kill: text-fallback also failed")

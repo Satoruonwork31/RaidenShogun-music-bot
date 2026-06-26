@@ -42,17 +42,51 @@ def _flood_seconds(exc: FloodWait) -> int:
     return int(getattr(exc, "value", None) or getattr(exc, "x", 30))
 
 
-async def _send_one(client, chat_id: int, *, reply, text_content: str):
+def _shift_entities_for_body(message, body_start: int):
+    """Return a list of MessageEntity objects shifted so they line up with
+    `message.text[body_start:]`. Entities entirely in the stripped prefix
+    are dropped; entities that straddle the split are clamped.
+
+    Used so `/broadcast <text-with-premium-emoji>` keeps the premium-emoji
+    entities — pyrofork's `send_message(text=str)` without an `entities=`
+    argument re-parses through whatever parse_mode is set and never re-emits
+    custom-emoji entities, which is why the visible glyph reverts to its
+    fallback character.
+    """
+    # Deep-copy each entity so we don't mutate state held on the original
+    # incoming Message (which other handlers may also read).
+    import copy
+
+    out = []
+    for ent in (message.entities or []):
+        ent_end = ent.offset + ent.length
+        if ent_end <= body_start:
+            continue
+        new = copy.copy(ent)
+        if ent.offset < body_start:
+            new.length = ent.length - (body_start - ent.offset)
+            new.offset = 0
+        else:
+            new.offset = ent.offset - body_start
+        if new.length <= 0:
+            continue
+        out.append(new)
+    return out
+
+
+async def _send_one(client, chat_id: int, *, reply, body: str, body_entities):
     """Returns (sent_message, error_class_name_or_None).
 
-    sent_message is the Message we placed; caller will try to pin it.
-
     For replied-message broadcasts we use `forward_messages(drop_author=True)`
-    rather than `Message.copy()` because copy() routes media through
-    `send_cached_media` WITHOUT passing parse_mode=DISABLED — that re-parses
+    rather than `Message.copy()`: copy() routes media through
+    `send_cached_media` WITHOUT parse_mode=DISABLED, which re-parses
     caption_entities and strips premium custom emoji. `forward_messages` is
-    a Telegram-native forward with the sender attribution removed, so entities
-    (including <emoji id="..."> custom emoji) survive byte-for-byte.
+    a Telegram-native forward with the sender attribution removed, so
+    entities (including <emoji id="..."> custom emoji) survive byte-for-byte.
+
+    For text-mode broadcasts we pass `entities=...` explicitly so the
+    caller-extracted (and offset-shifted) custom-emoji entities are kept
+    on the wire instead of being re-parsed away.
     """
     if reply is not None:
         forwarded = await client.forward_messages(
@@ -64,7 +98,12 @@ async def _send_one(client, chat_id: int, *, reply, text_content: str):
         )
         result = forwarded[0] if isinstance(forwarded, list) else forwarded
         return result, None
-    return await client.send_message(chat_id, text_content), None
+    sent = await client.send_message(
+        chat_id,
+        body,
+        entities=body_entities or None,
+    )
+    return sent, None
 
 
 async def _maybe_pin(client, message) -> bool:
@@ -106,13 +145,22 @@ async def broadcast_command(client, message):
         return
 
     reply = message.reply_to_message
-    text_content = (
-        " ".join(message.command[1:]).strip()
-        if len(message.command) > 1
-        else ""
-    )
 
-    if reply is None and not text_content:
+    # Pull the body text + entities directly off the original message so
+    # premium custom-emoji entities are preserved. Use `message.text` minus
+    # the "/broadcast " prefix rather than `message.command[1:]` (which
+    # strips entity offsets entirely).
+    body_text = ""
+    body_entities = []
+    if message.text and len(message.command) > 1:
+        # The body begins after the first whitespace following the command.
+        raw = str(message.text)
+        space = raw.find(" ")
+        if space != -1:
+            body_text = raw[space + 1 :]
+            body_entities = _shift_entities_for_body(message, space + 1)
+
+    if reply is None and not body_text:
         await message.reply_text(
             "Usage:\n"
             "• `/broadcast <text>` — send text to every known chat\n"
@@ -142,7 +190,7 @@ async def broadcast_command(client, message):
     for chat_id in targets:
         try:
             bcast, _ = await _send_one(
-                client, chat_id, reply=reply, text_content=text_content
+                client, chat_id, reply=reply, body=body_text, body_entities=body_entities
             )
             sent += 1
             if await _maybe_pin(client, bcast):
