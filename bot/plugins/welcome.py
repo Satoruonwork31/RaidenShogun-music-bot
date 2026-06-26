@@ -114,13 +114,29 @@ async def leave_legacy(client, message):
     await _send_leave(client, message.chat.id, user)
 
 
-@Client.on_chat_member_updated()
-async def welcome_via_chat_member(client, chat_member_updated):
-    """Modern path used by supergroups — fires on member status changes."""
-    import logging as _logging
-    _log = _logging.getLogger("RaidenShogun.welcome")
-    _log.info(
-        "chat_member_updated chat=%s new_status=%s old_status=%s user=%s",
+import logging as _logging
+
+_chat_member_log = _logging.getLogger("RaidenShogun.welcome")
+
+
+async def handle_chat_member_event(bot_client, chat_member_updated, source: str = "?"):
+    """Core join/leave dispatcher.
+
+    Called from two places:
+      1. The @Client.on_chat_member_updated() decorator below — bot-side,
+         fires for the subset of events Telegram delivers to the bot account.
+      2. bot/start.py registers this against the userbot programmatically,
+         catching events Telegram doesn't reliably push to bots even when
+         the bot is admin (pyrofork 2.3.69 has had spotty
+         UpdateChannelParticipant delivery to bot accounts).
+
+    `bot_client` is always the BOT client — that's what actually posts the
+    welcome card / farewell roast. Even when the event came in via the
+    userbot, we send the visible message via the bot.
+    """
+    _chat_member_log.info(
+        "chat_member_updated source=%s chat=%s new_status=%s old_status=%s user=%s",
+        source,
         chat_member_updated.chat.id if chat_member_updated.chat else None,
         chat_member_updated.new_chat_member.status if chat_member_updated.new_chat_member else None,
         chat_member_updated.old_chat_member.status if chat_member_updated.old_chat_member else None,
@@ -137,15 +153,23 @@ async def welcome_via_chat_member(client, chat_member_updated):
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
         if not is_enabled(chat_id):
             return
-        # Skip the welcome for owners / admins re-joining.
         if new_member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return
-        await _send_card(client, chat_id, new_member.user)
+        await _send_card(bot_client, chat_id, new_member.user)
         return
     if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
         if not departure_enabled(chat_id):
             return
-        # No savage farewell for owners or admins — they get a pass.
         if old_status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR):
             return
-        await _send_leave(client, chat_id, new_member.user)
+        await _send_leave(bot_client, chat_id, new_member.user)
+
+
+@Client.on_chat_member_updated()
+async def welcome_via_chat_member(client, chat_member_updated):
+    """Bot-side subscription. May or may not fire reliably (see
+    `handle_chat_member_event` docstring); the userbot-side
+    subscription in bot/start.py is the always-on path.
+    """
+    from bot.client import app
+    await handle_chat_member_event(app, chat_member_updated, source="bot")

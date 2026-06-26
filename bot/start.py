@@ -51,6 +51,24 @@ async def _run():
     except Exception:
         logger.exception("backfill_common_chats failed (continuing)")
 
+    # Subscribe the userbot to ChatMemberUpdated. This is the always-on
+    # path for greetings + departures. Telegram's MTProto only delivers
+    # UpdateChannelParticipant to bot accounts under specific scope
+    # conditions, and pyrofork 2.3.69 has had inconsistent behaviour
+    # there. The userbot is a regular user — it gets these unconditionally
+    # for every chat it's in.
+    from pyrogram.handlers import ChatMemberUpdatedHandler
+    from bot.plugins.welcome import handle_chat_member_event
+
+    async def _userbot_member_dispatch(_client, chat_member_updated):
+        try:
+            await handle_chat_member_event(app, chat_member_updated, source="userbot")
+        except Exception:
+            logger.exception("userbot chat_member_updated dispatch failed")
+
+    userbot.add_handler(ChatMemberUpdatedHandler(_userbot_member_dispatch))
+    logger.info("Registered userbot ChatMemberUpdated dispatch")
+
     me = await app.get_me()
     logger.info(f"Logged in as @{me.username} ({me.id})")
     await idle()

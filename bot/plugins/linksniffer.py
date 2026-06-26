@@ -20,7 +20,7 @@ import re
 from pyrogram import Client, filters
 
 from bot.utils.downloader import check_size_and_duration, download_video
-from bot.utils.player import _try_extract
+from bot.utils.player import YouTubeAuthRequiredError, _try_extract
 
 logger = logging.getLogger("RaidenShogun.linksniffer")
 
@@ -221,7 +221,11 @@ async def link_sniffer(client, message):
             disable_web_page_preview=True,
         )
 
-        probe = await asyncio.to_thread(_try_extract, url)
+        try:
+            probe = await asyncio.to_thread(_try_extract, url)
+        except YouTubeAuthRequiredError:
+            await status.edit_text(YouTubeAuthRequiredError.USER_MESSAGE)
+            return
         too_big = check_size_and_duration(probe or {})
         if too_big:
             await status.edit_text(f"❌ {too_big}")

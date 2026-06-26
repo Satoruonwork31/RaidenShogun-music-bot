@@ -7,7 +7,7 @@ from bot.utils.downloader import (
     check_size_and_duration,
     download_video,
 )
-from bot.utils.player import _try_extract
+from bot.utils.player import YouTubeAuthRequiredError, _try_extract
 from bot.utils.resolver import resolve_url
 
 
@@ -29,8 +29,11 @@ async def video_command(client, message):
         return
 
     await status.edit_text(f"ℹ️ Checking: {label}")
-    # Duration is what gates us — it's returned regardless of selected format.
-    probe = await asyncio.to_thread(_try_extract, url)
+    try:
+        probe = await asyncio.to_thread(_try_extract, url)
+    except YouTubeAuthRequiredError:
+        await status.edit_text(YouTubeAuthRequiredError.USER_MESSAGE)
+        return
     title = (probe.get("title") if isinstance(probe, dict) else None) or label
     too_big = check_size_and_duration(probe or {})
     if too_big:

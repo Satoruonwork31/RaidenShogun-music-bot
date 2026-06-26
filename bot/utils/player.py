@@ -16,6 +16,20 @@ from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 
+
+class YouTubeAuthRequiredError(Exception):
+    """All extraction paths failed with the YouTube bot-check / sign-in
+    page AND no cookies file is configured. Callers catch this to
+    render a friendly UX message instead of a raw yt-dlp traceback.
+    """
+
+    USER_MESSAGE = (
+        "🍪 YouTube is blocking this request and asking for a sign-in.\n\n"
+        "The bot owner needs to upload a `cookies.txt` exported from a "
+        "logged-in YouTube browser session and set the `COOKIES_FILE` "
+        "env var to its absolute path."
+    )
+
 # Outbound proxy for yt-dlp specifically. If unset, fall back to:
 #   1) PROXY_URL (explicit single proxy)
 #   2) the same picked-from-pool config that Telegram uses (so a single
@@ -87,8 +101,14 @@ def _opts_for(client: str, extra=None, *, video: bool = False) -> dict:
     return opts
 
 
+def _is_bot_check(text: str) -> bool:
+    """Substring match for YouTube's anti-bot landing pages."""
+    return any(m in text for m in ("sign in", "not a bot", "confirm you"))
+
+
 def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = False) -> dict | None:
     last_exc: Exception | None = None
+    bot_check_count = 0
     for client in PLAYER_CLIENTS:
         try:
             with YoutubeDL(_opts_for(client, extra, video=video)) as ydl:
@@ -97,17 +117,16 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
                 return info
         except (ExtractorError, DownloadError) as exc:
             text = str(exc).lower()
-            # "format not available" / "no formats found" → try next client.
-            # "Sign in" / "not a bot" → also try next, in case one slips through.
             last_exc = exc
+            if _is_bot_check(text):
+                bot_check_count += 1
+                continue
             if any(
                 marker in text
                 for marker in (
                     "format is not available",
                     "no video formats",
                     "no formats",
-                    "sign in",
-                    "not a bot",
                     "could not find",
                 )
             ):
@@ -116,6 +135,14 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
         except Exception as exc:
             last_exc = exc
             continue
+    # All paths failed. If every failure was the bot-check page and we
+    # have no cookies, that's a structurally distinct problem the caller
+    # should surface differently than "yt-dlp threw something weird."
+    if bot_check_count and not COOKIES_FILE:
+        raise YouTubeAuthRequiredError(
+            f"All {len(PLAYER_CLIENTS)} player clients hit the YouTube bot-check "
+            "and COOKIES_FILE is unset."
+        ) from last_exc
     if last_exc:
         raise last_exc
     return None
