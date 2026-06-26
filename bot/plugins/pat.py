@@ -246,6 +246,11 @@ async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> b
     """Send the GIF via the best available path. Returns True on success.
 
     Order:
+      0. If the entry is a Telegram file_id (not an http URL), send it
+         directly — instant, no external host, no download. THIS is the
+         recommended permanent fix: re-upload each GIF once via the bot
+         to capture a bot-usable file_id and put that string in
+         _RESPONSES instead of a tmpfiles URL.
       1. URL-direct via bot client. Skipped for tmpfiles.org because it
          consistently returns WEBPAGE_CURL_FAILED.
       2. Download once, upload via userbot (works in chats where the
@@ -253,6 +258,22 @@ async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> b
       3. Download once, upload via bot client (subject to the
          pyrofork+ntgcalls bot-client media-DC hang).
     """
+    # Path 0 — file_id direct. A file_id is not an http(s) URL.
+    if not gif_url.lower().startswith(("http://", "https://")):
+        try:
+            await asyncio.wait_for(
+                bot_client.send_animation(
+                    chat_id=chat_id, animation=gif_url, caption=caption,
+                    parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
+                ),
+                timeout=15,
+            )
+            logger.info("pat: file_id send OK")
+            return True
+        except Exception as exc:
+            logger.warning("pat: file_id send failed (%s) — asset may be deleted", type(exc).__name__)
+            return False
+
     if "tmpfiles.org" not in gif_url:
         if await _try_url_send(bot_client, chat_id, gif_url, caption, reply_to_id):
             return True

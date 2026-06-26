@@ -69,6 +69,42 @@ async def _run():
     userbot.add_handler(ChatMemberUpdatedHandler(_userbot_member_dispatch))
     logger.info("Registered userbot ChatMemberUpdated dispatch")
 
+    # Cookie diagnostics — a typo'd COOKIES_FILE path silently behaves
+    # the same as unset, so surface the real state at boot.
+    import os as _os
+    cookies_path = _os.getenv("COOKIES_FILE", "").strip()
+    if not cookies_path:
+        logger.warning(
+            "COOKIES_FILE is unset — YouTube downloads will fail on the "
+            "bot-check wall. Set COOKIES_FILE=/abs/path/cookies.txt in .env."
+        )
+    elif _os.path.exists(cookies_path):
+        logger.info("COOKIES_FILE is set and exists: %s", cookies_path)
+    else:
+        logger.warning(
+            "COOKIES_FILE is set to %r but that path does NOT exist on disk "
+            "— treated the same as unset. Check for a typo.",
+            cookies_path,
+        )
+
+    # Empirical membership snapshot — list every chat the userbot is
+    # currently a member of. Greetings/departure delivery via the userbot
+    # ChatMemberUpdated path depends on the userbot being in the chat at
+    # the moment a join/leave happens; this shows what it can see at boot.
+    try:
+        dialog_chats = []
+        async for dialog in userbot.get_dialogs():
+            ch = dialog.chat
+            if ch and ch.type and ch.type.value in ("group", "supergroup"):
+                dialog_chats.append(f"{ch.id} ({ch.title})")
+        logger.info(
+            "userbot is a member of %d group(s)/supergroup(s): %s",
+            len(dialog_chats),
+            "; ".join(dialog_chats) if dialog_chats else "(none)",
+        )
+    except Exception:
+        logger.exception("could not enumerate userbot dialogs at startup")
+
     me = await app.get_me()
     logger.info(f"Logged in as @{me.username} ({me.id})")
     await idle()

@@ -28,6 +28,9 @@ PLUGINS = [
     "linksniffer",
     "kill",
     "pat",
+    "pin",
+    "purge",
+    "celebrate",
 ]
 
 def load_plugins():

@@ -18,6 +18,7 @@ import asyncio
 import re
 
 from bot.utils.player import (
+    YouTubeAuthRequiredError,
     get_audio_stream,
     get_video_stream,
     search_youtube,
@@ -30,6 +31,11 @@ _SC_RE = re.compile(r"(?:soundcloud\.com|snd\.sc)", re.IGNORECASE)
 
 
 def _humanize_ytdlp_error(exc: Exception) -> str:
+    # The player layer already builds a polished message for the
+    # cookies-required case — use it verbatim rather than re-deriving
+    # from the string. Must come BEFORE the string-matching branches.
+    if isinstance(exc, YouTubeAuthRequiredError):
+        return YouTubeAuthRequiredError.USER_MESSAGE
     text = str(exc).lower()
     if "sign in to confirm" in text or "not a bot" in text:
         return (

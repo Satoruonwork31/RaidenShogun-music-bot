@@ -34,10 +34,35 @@ _URL_RE = re.compile(
     r"|youtu\.be/[^\s\"<>/?#]+"
     # Instagram reels, posts, IGTV.
     r"|instagram\.com/(?:reel|reels|p|tv)/[^\s\"<>/?#]+"
+    # Pinterest: pinterest.<tld>/pin/<id> (any country-code domain), plus
+    # the pin.it/<shortcode> mobile-share redirector.
+    r"|pinterest\.[a-z.]+/pin/[^\s\"<>/?#]+"
+    r"|pin\.it/[^\s\"<>/?#]+"
     r")"
     r"[^\s\"<>]*",
     re.IGNORECASE,
 )
+
+
+def _is_pinterest(url: str) -> bool:
+    u = url.lower()
+    return "pinterest." in u or "pin.it/" in u
+
+
+def _has_video_stream(probe) -> bool:
+    """True if yt-dlp's info dict actually contains a playable video.
+
+    Pinterest image pins have no video formats — the extractor returns
+    no direct url and only vcodec=='none' (or no) formats.
+    """
+    if not isinstance(probe, dict):
+        return False
+    if isinstance(probe.get("url"), str) and probe["url"].startswith("http"):
+        return True
+    for fmt in (probe.get("formats") or []):
+        if isinstance(fmt, dict) and fmt.get("vcodec") not in (None, "none"):
+            return True
+    return False
 
 async def _attempt(label, coro, timeout=60):
     """Run an upload coroutine with a forced cancellation timeout.
@@ -221,14 +246,38 @@ async def link_sniffer(client, message):
             disable_web_page_preview=True,
         )
 
+        is_pin = _is_pinterest(url)
+
         # video=True so yt-dlp picks a video format (not bestaudio). Without
         # this, the resolved info["url"] is the audio stream, which Telegram
         # then renders as an audio file when send_video[URL] fetches it.
+        # Pinterest uses the same video=True path — its extractor returns a
+        # video stream for video pins and nothing usable for image pins.
         try:
             probe = await asyncio.to_thread(_try_extract, url, None, video=True)
         except YouTubeAuthRequiredError:
             await status.edit_text(YouTubeAuthRequiredError.USER_MESSAGE)
             return
+        except Exception as exc:
+            if is_pin:
+                # Pinterest intermittently serves fake 404s to yt-dlp as an
+                # anti-scraping measure — a known unfixable upstream issue.
+                # Give an honest message rather than the generic failure.
+                logger.warning("link_sniffer: Pinterest extraction failed: %s", exc)
+                await status.edit_text(
+                    "❌ Pinterest blocked this request — their anti-bot "
+                    "measures are inconsistent. Try again later or download "
+                    "manually."
+                )
+                return
+            raise
+
+        # Pinterest image pins have no video stream — say so clearly instead
+        # of falling into the generic "couldn't download" path.
+        if is_pin and not _has_video_stream(probe):
+            await status.edit_text("🖼️ That's an image pin — nothing to download.")
+            return
+
         too_big = check_size_and_duration(probe or {})
         if too_big:
             await status.edit_text(f"❌ {too_big}")
@@ -272,6 +321,13 @@ async def link_sniffer(client, message):
         logger.exception("link_sniffer failed for %s", url)
         if status is not None:
             try:
+                if _is_pinterest(url):
+                    await status.edit_text(
+                        "❌ Pinterest blocked this request — their anti-bot "
+                        "measures are inconsistent. Try again later or download "
+                        "manually."
+                    )
+                    return
                 await status.edit_text(
                     f"❌ Auto-download failed: {type(exc).__name__}: {exc}"
                 )

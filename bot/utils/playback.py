@@ -55,7 +55,15 @@ async def end_session(chat_id: int) -> None:
 
     try:
         await userbot.leave_chat(chat_id)
-        logger.info("end_session: userbot left chat %s", chat_id)
+        # WARNING level on purpose: this is the prime suspect for
+        # greetings/departure not firing. Once the userbot leaves, the
+        # userbot-side ChatMemberUpdated dispatch (bot/start.py) stops
+        # seeing member events for this chat until /play re-invites it.
+        logger.warning(
+            "end_session: userbot LEFT chat %s — it will no longer receive "
+            "ChatMemberUpdated (join/leave) events here until re-invited via /play",
+            chat_id,
+        )
     except Exception as exc:
         logger.info("end_session: userbot.leave_chat(%s) failed: %s", chat_id, exc)
 

@@ -37,7 +37,12 @@ HELP_PAGES: list[tuple[str, str]] = [
         "• /ban - Ban a user in this chat\n"
         "• /unban - Unban a user in this chat\n"
         "• /gban - (sudo) global ban across every chat the bot is in\n"
-        "• /removegban (alias /ungban) - (sudo) lift a global ban",
+        "• /removegban (alias /ungban) - (sudo) lift a global ban\n"
+        "• /pin - Pin a replied message (add 'loud' to notify)\n"
+        "• /unpin - Unpin a replied (or the latest) message\n"
+        "• /unpinall confirm - Clear all pins\n"
+        "• /purge - Reply: delete up to here. /purge n: last n. "
+        "/purge n min: last n minutes (max 200, &lt;48h only)",
     ),
     (
         "General",
@@ -47,9 +52,10 @@ HELP_PAGES: list[tuple[str, str]] = [
         '<emoji id="5972061723400605896">🎲</emoji> <b>Fun</b>\n'
         "• /toss - Toss a coin\n"
         "• /kill - Attempt to kill another user (50/50 outcome)\n"
-        "• /pat - Give someone a wholesome headpat\n\n"
+        "• /pat - Give someone a wholesome headpat\n"
+        "• /celebrate &lt;occasion&gt; - bday/anniversary/promotion/win/welcome-back\n\n"
         '🔗 <b>Auto-download</b>\n'
-        "Paste a YouTube or Instagram link in any chat — I'll fetch the video and post it back.\n\n"
+        "Paste a YouTube, Instagram, or Pinterest link in any chat — I'll fetch the video and post it back.\n\n"
         '<emoji id="5350427505805238170">🆔</emoji> <b>Information</b>\n'
         "• /id - Get user, group, or chat ID\n\n"
         '<emoji id="5341715473882955310">⚙️</emoji> <b>General</b>\n'

@@ -65,14 +65,30 @@ async def _send_card(client, chat_id: int, user) -> None:
 async def _is_chat_owner_or_admin(client, chat_id: int, user_id: int) -> bool:
     try:
         member = await client.get_chat_member(chat_id, user_id)
-    except Exception:
+    except Exception as exc:
+        # Log instead of silently swallowing — USER_NOT_PARTICIPANT here
+        # (common for users who already left) means the "skip departing
+        # admins" guard can never confirm admin status, so it returns
+        # False and the farewell fires. That's the desired outcome for a
+        # leaver, but we want it visible rather than assumed.
+        import logging as _l
+        _l.getLogger("RaidenShogun.welcome").info(
+            "_is_chat_owner_or_admin(chat=%s user=%s) get_chat_member raised: %r",
+            chat_id, user_id, exc,
+        )
         return False
     return member.status in (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
 
 
 @Client.on_message(filters.new_chat_members & filters.group)
 async def welcome_new_members(client, message):
-    """Legacy path used by regular groups."""
+    """Legacy path used by regular groups (plain join service message)."""
+    import logging as _l
+    _l.getLogger("RaidenShogun.welcome").info(
+        "welcome_new_members (legacy new_chat_members) FIRED in chat=%s, members=%s",
+        message.chat.id if message.chat else None,
+        [u.id for u in (message.new_chat_members or [])],
+    )
     if not is_enabled(message.chat.id):
         return
     for user in message.new_chat_members:
@@ -192,5 +208,12 @@ async def welcome_via_chat_member(client, chat_member_updated):
     `handle_chat_member_event` docstring); the userbot-side
     subscription in bot/start.py is the always-on path.
     """
+    # Entry log BEFORE dispatch, separate from handle_chat_member_event's
+    # own logging, so we can confirm the BOT account is receiving
+    # ChatMemberUpdated at all — independent of the userbot path.
+    _chat_member_log.info(
+        "welcome_via_chat_member (BOT-side ChatMemberUpdated) FIRED in chat=%s",
+        chat_member_updated.chat.id if chat_member_updated.chat else None,
+    )
     from bot.client import app
     await handle_chat_member_event(app, chat_member_updated, source="bot")
