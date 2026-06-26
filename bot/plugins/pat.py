@@ -45,91 +45,100 @@ _FALLBACK = "🤚"
 _SEND_TIMEOUT = 25
 
 
-# Captions and GIFs are sampled INDEPENDENTLY per /pat call, so every
-# caption can ride any GIF (10 × 6 = 60 distinct caption+gif pairings).
-# To add a caption or a GIF, drop it into the matching pool below.
+# Fixed (gif, caption) pairs — the unit /pat samples from. random.choice
+# picks ONE entry; gif_url and caption stay bonded for that response.
+# With 10 captions and 6 operator-supplied GIFs, the 4 surplus captions
+# reuse GIFs 1-4 (so gifs 1-4 appear twice in the pool, 5-6 once).
+#
+# Each entry: (gif_url, emoji_ids, template).
+# Templates use {e0}, {e1}, ... in the order emojis appear in the line.
 
-# Each entry: (emoji_ids, template). Templates use {e0}, {e1}, ... in
-# the order emojis appear in the line.
-_CAPTIONS = [
-    # ── Caption 1 ──
+_GIF_KOBAYASHI = "https://tmpfiles.org/wlwt01UyeFY0/kobayashi-dragon.mp4"
+_GIF_SENPAI = "https://tmpfiles.org/wZwA0GUlffqV/senpai-ga-uzai-kouhai-no-hanashi-futaba.mp4"
+_GIF_ANYA = "https://tmpfiles.org/wuwJ0SUxfnck/spy-x-family-anya-forger.mp4"
+_GIF_FERN = "https://tmpfiles.org/wKwd0EULgca0/fern-headpats-stark-fern.mp4"
+_GIF_SAKUTA = "https://tmpfiles.org/wVwb0LL7j0bL/sakuta-azusagawa-mai-sakurajima.mp4"
+_GIF_GURA = "https://tmpfiles.org/wRwS0yL2v9Q7/gawr-gura-head-pat.mp4"
+
+_RESPONSES = [
+    # ── 1 / kobayashi ──
     (
+        _GIF_KOBAYASHI,
         ["5386414139130260061", "4956436416142771580"],
         "{e0} {e1} {user1} gently headpats {user2}.\n\n"
         "A tiny moment of peace in the middle of the chaos.",
     ),
-    # ── Caption 2 ──
+    # ── 2 / senpai ──
     (
+        _GIF_SENPAI,
         ["5830278651026873081"],
         "{e0} {user1} gives {user2} a soft headpat.\n\n"
         "+10 Comfort\n"
         "+100 Serotonin.",
     ),
-    # ── Caption 3 ──
+    # ── 3 / anya ──
     (
+        _GIF_ANYA,
         ["5911493248483859403"],
         "{e0} {user1} reaches over and headpats {user2}.\n\n"
         "Mission accomplished: Emotional support delivered.",
     ),
-    # ── Caption 4 ──
+    # ── 4 / fern ──
     (
+        _GIF_FERN,
         ["5222179653497670288"],
         "{e0} {user1} headpats {user2}.\n\n"
         "A rare gesture. Handle with care.",
     ),
-    # ── Caption 5 ──
+    # ── 5 / sakuta-mai ──
     (
+        _GIF_SAKUTA,
         ["5215226264654213464"],
         "{e0} {user1} gently pats {user2}'s head.\n\n"
         "Achievement Unlocked:\n"
         "Certified Comfort Provider.",
     ),
-    # ── Caption 6 ──
+    # ── 6 / gawr-gura ──
     (
+        _GIF_GURA,
         ["5818719339255176305", "5962830584551052132", "4958577444454925201"],
         "{e0} {e1} {user1} gently headpats {user2}.\n\n"
         "\"You're doing better than you think.\" {e2}",
     ),
-    # ── Caption 7 ──
+    # ── 7 / kobayashi (reused) ──
     (
+        _GIF_KOBAYASHI,
         ["5366472202248009747", "5386414139130260061",
          "5341695605364244563", "6181428412574339821"],
         "{e0} {e1} {user1} softly pats {user2}'s head.\n\n"
         "For just a moment, the world feels a little lighter. {e2} {e3}",
     ),
-    # ── Caption 8 ──
+    # ── 8 / senpai (reused) ──
     (
+        _GIF_SENPAI,
         ["5445278980909310899", "5235513242029139973",
          "5440716467215540650", "5460724202996773009"],
         "{e0} {e1} {user1} gives {user2} a warm headpat.\n\n"
         "+1 Happy Thought {e2}\n"
         "+1 Safe Feeling {e3}",
     ),
-    # ── Caption 9 ──
+    # ── 9 / anya (reused) ──
     (
+        _GIF_ANYA,
         ["5769543759012303026", "5460858729962421671",
          "5215226264654213464", "4956468890390496140"],
         "{e0} {e1} {user1} carefully headpats {user2}.\n\n"
         "No words needed. Just a quiet reminder that someone cares. {e2} {e3}",
     ),
-    # ── Caption 10 ──
+    # ── 10 / fern (reused) ──
     (
+        _GIF_FERN,
         ["4956708038464504901", "5818976758120067408",
          "5969733271305588971", "4958577444454925201"],
         "{e0} {e1} {user1} gives {user2} the gentlest headpat imaginable.\n\n"
         "May your worries shrink, your smile grow, and your day become a "
         "little brighter. {e2} {e3}",
     ),
-]
-
-# All 6 operator-supplied GIFs; picked uniformly at random per /pat call.
-_GIFS = [
-    "https://tmpfiles.org/wlwt01UyeFY0/kobayashi-dragon.mp4",
-    "https://tmpfiles.org/wZwA0GUlffqV/senpai-ga-uzai-kouhai-no-hanashi-futaba.mp4",
-    "https://tmpfiles.org/wuwJ0SUxfnck/spy-x-family-anya-forger.mp4",
-    "https://tmpfiles.org/wKwd0EULgca0/fern-headpats-stark-fern.mp4",
-    "https://tmpfiles.org/wVwb0LL7j0bL/sakuta-azusagawa-mai-sakurajima.mp4",
-    "https://tmpfiles.org/wRwS0yL2v9Q7/gawr-gura-head-pat.mp4",
 ]
 
 
@@ -350,30 +359,33 @@ async def pat_command(client, message):
         )
         return
 
-    emoji_ids, template = random.choice(_CAPTIONS)
-    gif_url = random.choice(_GIFS)
-    text = _render(template, emoji_ids, attacker_mention, target_mention)
+    # Single random pick — gif_url and caption stay bonded.
+    gif_url, emoji_ids, template = random.choice(_RESPONSES)
+    caption = _render(template, emoji_ids, attacker_mention, target_mention)
 
-    ok = await _send_pat_gif(client, message.chat.id, gif_url, text, message.id)
+    ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
     if ok:
         return
-    logger.info("pat: gif send failed across all paths, falling back to text")
+    logger.info("pat: gif send failed across all paths — sending caption only (no URL)")
 
+    # CAPTION-ONLY fallback. Under no circumstances does this path include
+    # the gif URL in the message body — the user must never see the raw
+    # tmpfiles link as plain text.
     try:
         await message.reply_text(
-            text,
+            caption,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        logger.info("pat: text reply ok")
+        logger.info("pat: caption-only reply ok")
     except Exception:
-        logger.exception("pat: text reply failed")
-        # Last-ditch: strip emoji tags entirely.
+        logger.exception("pat: HTML caption reply failed, retrying plain")
+        # Last-ditch: strip emoji tags. Still no URL.
         plain = template.format(
             user1=attacker_mention, user2=target_mention,
             **{f"e{i}": _FALLBACK for i in range(len(emoji_ids))},
         )
         try:
-            await message.reply_text(plain)
+            await message.reply_text(plain, disable_web_page_preview=True)
         except Exception:
-            logger.exception("pat: plain fallback failed too")
+            logger.exception("pat: plain caption reply failed too")
