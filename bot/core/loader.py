@@ -27,6 +27,7 @@ PLUGINS = [
     "playback_buttons",
     "linksniffer",
     "kill",
+    "pat",
 ]
 
 def load_plugins():
