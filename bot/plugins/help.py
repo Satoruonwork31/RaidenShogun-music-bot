@@ -47,7 +47,7 @@ HELP_PAGES: list[tuple[str, str]] = [
         '<emoji id="5972061723400605896">🎲</emoji> <b>Fun</b>\n'
         "• /toss - Toss a coin\n"
         "• /kill - Attempt to kill another user (50/50 outcome)\n\n"
-        '<emoji id="5283117486141373660">🔗</emoji> <b>Auto-download</b>\n'
+        '🔗 <b>Auto-download</b>\n'
         "Paste a YouTube or Instagram link in any chat — I'll fetch the video and post it back.\n\n"
         '<emoji id="5350427505805238170">🆔</emoji> <b>Information</b>\n'
         "• /id - Get user, group, or chat ID\n\n"
