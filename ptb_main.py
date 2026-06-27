@@ -1,3 +1,16 @@
+"""DEPRECATED — DO NOT RUN.
+
+This is a parallel python-telegram-bot implementation that was superseded
+by the pyrogram path under bot/* and main.py. It is kept temporarily as
+a reference for handler shapes (notably _ensure_userbot_in_chat and the
+replied-media download flow). The real entry point is main.py.
+
+It is NOT in requirements.txt (no python-telegram-bot pin), so attempting
+to run this file will fail at import on a fresh install. Schedule for
+deletion once the open ports in AUDIT_REPORT.md HIGH-3 are confirmed
+landed in the pyrogram path.
+"""
+
 import asyncio
 import logging
 

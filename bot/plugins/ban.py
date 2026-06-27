@@ -1,6 +1,8 @@
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType, MessageEntityType
 
+from bot.client import userbot
+
 
 _ADMIN_STATUSES = (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
 
@@ -38,7 +40,6 @@ async def _resolve_target(client, message):
     reason = " ".join(message.command[2:]).strip()
 
     # Bot accounts can't always resolve @username; the userbot (MTProto) can.
-    from bot.client import userbot
     try:
         if raw.isdigit():
             user = await client.get_users(int(raw))

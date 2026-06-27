@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-25 (owner gating fixed, /departure toggle, assistant auto-leaves group after VC)
+Last updated: 2026-06-27 (requirements pinned, dead code dropped, ptb_main.py deprecated)
 
 ## Project Overview
 
@@ -102,6 +102,55 @@ See AUDIT_REPORT.md for the prioritized list and severity. High-level:
 - MEDIUM: bot/utils/queue.py is dead code.
 
 ## Fix History
+
+### 2026-06-27 — Pinning, dead code, ptb deprecation, minor cleanups
+
+Static-only pass (no specific user-reported symptom; closing audit items
+that don't require user input or architectural decisions).
+
+Files changed:
+- requirements.txt — pinned pyrofork==2.3.69, py-tgcalls==2.3.3,
+  TgCrypto==1.2.5, python-dotenv==1.2.2, aiohttp==3.14.1,
+  Pillow==12.2.0. yt-dlp left as `>=2026.6.9` (extractor moves too
+  fast to hard-pin). Versions captured from a clean venv install in
+  this sandbox; should reproduce on the live VPS.
+- bot/core/music.py — DELETED. Was a one-line dead file (`from
+  pytgcalls import PyTgCalls`). Grep confirmed no importers.
+- bot/plugins/id.py, ban.py, unban.py — promoted lazy `from
+  bot.client import userbot` to top-of-file imports. No cycle risk;
+  client.py imports nothing from plugins.
+- bot/utils/greetings.py — _save() now writes to a tmp file and
+  os.replace's onto the target, with tmp cleanup on OSError. Matches
+  the pattern already used by chats.py and departure.py.
+- ptb_main.py — added DEPRECATED docstring at module top. NOT
+  deleted; still useful as a reference for the
+  ensure_userbot_in_chat / replied-media handlers that need porting
+  to the pyrogram path (HIGH-3 in AUDIT_REPORT.md).
+
+Audit items closed: HIGH-2, MED-2, MED-3 (stale), MED-5, LOW-1
+(stale), LOW-5. HIGH-1 marked decided (pyrogram); ptb_main.py
+deferred for deletion.
+
+Audit items still open and BLOCKED on user action:
+- CRIT-1: rotate BOT_TOKEN, API_HASH, STRING_SESSION; purge .env
+  from git history. The operator pasted a GitHub PAT in chat in
+  this session; that PAT must also be revoked at
+  https://github.com/settings/tokens. None of these were used.
+
+Audit items still open but unblocked (for next session):
+- HIGH-3 (assistant auto-invite — partial).
+- MED-1 (no top-level exception handler in startup).
+- MED-4 (/help text re-audit now that the commands are real).
+- MED-6 (bot/utils/youtube.py purpose).
+
+Verification performed:
+- py_compile on every changed file: PASS.
+- pip install of pinned versions in fresh venv: PASS (in sandbox).
+- pip freeze diff matches the pinned set: PASS.
+
+Verification NOT performed:
+- Live Telegram smoke — no creds in sandbox, leaked creds in repo
+  must be rotated before any live test (see CRIT-1).
 
 ### 2026-06-25 — Owner gating, /departure toggle, assistant anti-misuse
 
@@ -348,6 +397,12 @@ Verification performed:
 
 ## Session Log
 
+- 2026-06-27: Third pass, no specific user symptom. Closed HIGH-2
+  (pin reqs), MED-2 (delete dead file), MED-5 (promote imports),
+  LOW-5 (atomic write). Marked ptb_main.py DEPRECATED. CRIT-1 still
+  blocks live testing. Operator pasted a GH PAT in chat — flagged
+  and not used. Verification: py_compile + venv install + pip freeze
+  match.
 - 2026-06-25: Second pass focused on three user-reported breakages:
   owner gating (sudo commands rejected the deployer), departures (not
   firing, conflated with greetings toggle), and assistant lingering

@@ -1,6 +1,8 @@
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType, MessageEntityType
 
+from bot.client import userbot
+
 
 _ADMIN_STATUSES = (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
 
@@ -36,7 +38,6 @@ async def _resolve_target(client, message):
     raw = message.command[1].lstrip("@")
     reason = " ".join(message.command[2:]).strip()
 
-    from bot.client import userbot
     try:
         if raw.isdigit():
             user = await client.get_users(int(raw))

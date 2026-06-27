@@ -1,6 +1,41 @@
 # RaidenShogun Music Bot — Audit Report
 
-Date: 2026-06-24 (initial), 2026-06-25 (delta below)
+Date: 2026-06-24 (initial), 2026-06-25 (delta), 2026-06-27 (delta below)
+
+## 2026-06-27 — Delta
+
+Resolved this pass:
+- **HIGH-2 (unpinned requirements)** — pinned to the versions captured
+  from a clean venv install: pyrofork==2.3.69, py-tgcalls==2.3.3,
+  TgCrypto==1.2.5, python-dotenv==1.2.2, aiohttp==3.14.1,
+  Pillow==12.2.0. `yt-dlp>=2026.6.9` left as a floor (YouTube
+  extractor needs frequent updates; pinning hard guarantees breakage).
+- **MED-2 (dead bot/core/music.py)** — deleted. No imports referenced it.
+- **MED-3 (dead bot/utils/queue.py)** — RESOLVED in 2026-06-24 delta
+  (file is now the real per-chat queue used by playback). Striking
+  from open list.
+- **MED-5 (lazy userbot imports)** — promoted to top-of-file in
+  bot/plugins/id.py, ban.py, unban.py.
+- **LOW-1 (per-call makedirs)** — already at module load in
+  bot/plugins/play.py:15. Audit was stale. No change needed.
+- **LOW-5 (greetings.py non-atomic write)** — switched to tmp+os.replace
+  with cleanup on failure.
+- **HIGH-1 (ptb vs pyrogram split)** — pyrogram chosen, ptb_main.py
+  marked DEPRECATED via module docstring. Not deleted yet (preserves
+  reference handlers for HIGH-3 port).
+
+Still open:
+- **CRIT-1** (credential leak) — requires user action, no progress.
+  The .env paste in the most recent operator message has been
+  treated as compromised and was not used; rotation still required
+  on BOT_TOKEN, API_HASH, STRING_SESSION.
+- **HIGH-3** (assistant auto-invite) — partial (the
+  ensure_userbot_in_chat helper exists; needs the invite-link path
+  hardened for non-admin bot deployments).
+- **MED-1** (no top-level exception handler in startup).
+- **MED-4** (/help advertises commands that are now real — re-audit).
+- **MED-6** (bot/utils/youtube.py purpose unclear).
+- **LOW-2, LOW-3, LOW-4, LOW-6** — unchanged.
 
 ## 2026-06-25 — Delta
 

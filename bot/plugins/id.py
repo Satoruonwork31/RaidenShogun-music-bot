@@ -1,6 +1,8 @@
 from pyrogram import Client, filters
 from pyrogram.enums import MessageEntityType
 
+from bot.client import userbot
+
 
 @Client.on_message(filters.command("id"))
 async def id_command(client, message):
@@ -31,7 +33,6 @@ async def id_command(client, message):
 
     if len(message.command) >= 2:
         raw = message.command[1].lstrip("@")
-        from bot.client import userbot
         try:
             if raw.isdigit():
                 u = await client.get_users(int(raw))

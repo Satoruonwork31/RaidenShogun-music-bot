@@ -31,11 +31,16 @@ def _load() -> None:
 
 
 def _save() -> None:
+    tmp = f"{GREETINGS_FILE}.tmp"
     try:
-        with open(GREETINGS_FILE, "w") as f:
+        with open(tmp, "w") as f:
             json.dump(sorted(_enabled), f)
+        os.replace(tmp, GREETINGS_FILE)
     except OSError:
-        pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def is_enabled(chat_id: int) -> bool:
