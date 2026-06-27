@@ -155,12 +155,6 @@ ENV/
 env.bak/
 venv.bak/
 
-# Secrets / per-host config — keep .env templates trackable but never the
-# real one. `git check-ignore .env` should now return success.
-.env
-.env.*
-!.env.example
-
 # Spyder project settings
 .spyderproject
 .spyproject
