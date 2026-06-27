@@ -59,6 +59,66 @@ def _yt_dlp_proxy() -> str:
 
 YT_DLP_PROXY = _yt_dlp_proxy()
 
+
+def _load_proxy_pool() -> list[str]:
+    """Build the proxy fallback pool.
+
+    Sources, in order:
+      1. YT_DLP_PROXY_LIST env var pointing at a file (one proxy URL per
+         non-blank, non-`#` line). Lets the operator hot-swap the pool
+         without restarting.
+      2. YT_DLP_PROXIES env var as comma- or newline-separated URLs.
+      3. The single-proxy fallbacks from _yt_dlp_proxy() (already covers
+         YT_DLP_PROXY / PROXY_URL / bot.config.PROXY).
+
+    Always returns at least one entry: "" means "direct, no proxy". The
+    rotation loop in _try_extract iterates through the pool, so an empty
+    pool means a single direct attempt.
+    """
+    pool: list[str] = []
+
+    list_path = os.getenv("YT_DLP_PROXY_LIST", "").strip()
+    if list_path and os.path.exists(list_path):
+        try:
+            with open(list_path) as f:
+                for line in f:
+                    s = line.strip()
+                    if s and not s.startswith("#"):
+                        pool.append(s)
+        except OSError:
+            pass
+
+    raw = os.getenv("YT_DLP_PROXIES", "")
+    if raw:
+        for part in raw.replace("\n", ",").split(","):
+            s = part.strip()
+            if s and s not in pool:
+                pool.append(s)
+
+    if YT_DLP_PROXY and YT_DLP_PROXY not in pool:
+        pool.append(YT_DLP_PROXY)
+
+    return pool or [""]
+
+
+_PROXY_POOL: list[str] = _load_proxy_pool()
+_active_proxy_idx: int = 0
+
+
+def current_proxy() -> str:
+    return _PROXY_POOL[_active_proxy_idx % len(_PROXY_POOL)]
+
+
+def rotate_proxy() -> str:
+    """Advance the active proxy to the next slot. Returns the new active."""
+    global _active_proxy_idx
+    _active_proxy_idx = (_active_proxy_idx + 1) % len(_PROXY_POOL)
+    return current_proxy()
+
+
+def proxy_pool_size() -> int:
+    return len(_PROXY_POOL)
+
 # Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
 # - `web` is the only client that fully honours cookies AND can solve the
 #   n-challenge (with deno + ejs:github components downloaded).
@@ -90,8 +150,9 @@ def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool
         opts["extractor_args"] = {"youtube": {"player_client": [client]}}
     if use_cookies and COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
-    if YT_DLP_PROXY:
-        opts["proxy"] = YT_DLP_PROXY
+    proxy = current_proxy()
+    if proxy:
+        opts["proxy"] = proxy
     if extra:
         opts.update(extra)
     return opts
@@ -160,32 +221,46 @@ def _extract_pass(url_or_query, extra, *, video, use_cookies):
 
 
 def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = False) -> dict | None:
-    # Pass 1: no cookies. YouTube serves richer format lists to anonymous
-    # server-IP sessions than to cookied ones (cookies trigger PO-token-only
-    # mode that collapses formats down to storyboards).
-    info, last_exc, bot_no_cookies = _extract_pass(
-        url_or_query, extra, video=video, use_cookies=False,
-    )
-    if info is not None:
-        return info
+    """Two-pass extract (anon → cookied) wrapped in a proxy rotation loop.
 
-    # Pass 2: with cookies, if available. Auth-gated / age-restricted
-    # videos need this.
+    Each iteration of the outer loop uses one proxy from the pool. If
+    every client under both passes fails for that proxy, we rotate to
+    the next proxy and try again. Cap = pool size, so a totally dead
+    pool returns the last error rather than spinning forever.
+    """
+    last_exc: Exception | None = None
+    bot_no_cookies = 0
     bot_with_cookies = 0
-    if COOKIES_FILE:
-        info, last_exc2, bot_with_cookies = _extract_pass(
-            url_or_query, extra, video=video, use_cookies=True,
+    pool_size = max(1, proxy_pool_size())
+
+    for _ in range(pool_size):
+        info, exc1, b1 = _extract_pass(
+            url_or_query, extra, video=video, use_cookies=False,
         )
         if info is not None:
             return info
-        if last_exc2:
-            last_exc = last_exc2
+        if exc1:
+            last_exc = exc1
+        bot_no_cookies = max(bot_no_cookies, b1)
 
-    # All paths failed. If both passes hit the bot-check page (or pass 1
-    # did and no cookies are configured), surface that distinctly.
+        if COOKIES_FILE:
+            info, exc2, b2 = _extract_pass(
+                url_or_query, extra, video=video, use_cookies=True,
+            )
+            if info is not None:
+                return info
+            if exc2:
+                last_exc = exc2
+            bot_with_cookies = max(bot_with_cookies, b2)
+
+        # No success under this proxy — try the next one.
+        if pool_size > 1:
+            rotate_proxy()
+
+    # All proxies × all passes failed.
     if (bot_no_cookies or bot_with_cookies) and (not COOKIES_FILE or bot_with_cookies):
         raise YouTubeAuthRequiredError(
-            "Every player client hit the YouTube bot-check or returned no playable formats."
+            "Every proxy / player client hit the YouTube bot-check or returned no playable formats."
         ) from last_exc
     if last_exc:
         raise last_exc

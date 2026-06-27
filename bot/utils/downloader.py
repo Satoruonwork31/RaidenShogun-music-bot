@@ -19,7 +19,13 @@ import os
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
 
-from bot.utils.player import COOKIES_FILE, PLAYER_CLIENTS
+from bot.utils.player import (
+    COOKIES_FILE,
+    PLAYER_CLIENTS,
+    current_proxy,
+    proxy_pool_size,
+    rotate_proxy,
+)
 
 DOWNLOAD_DIR = "/tmp/raiden_downloads"
 
@@ -93,6 +99,9 @@ def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: 
         opts["postprocessors"] = postprocessors
     if use_cookies and COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
+    proxy = current_proxy()
+    if proxy:
+        opts["proxy"] = proxy
     return opts
 
 
@@ -143,18 +152,32 @@ def _download_pass(url, *, video, quality, use_cookies) -> tuple[str | None, dic
 
 
 def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple[str, dict]:
+    """Anon → cookied passes wrapped in a proxy rotation loop.
+
+    Mirrors player._try_extract — one proxy per outer iteration, rotate
+    on failure, cap at pool size.
+    """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    # Mirrors player._try_extract: anonymous pass first, then cookied
-    # fallback for auth-gated videos.
-    path, info, last_exc = _download_pass(url, video=video, quality=quality, use_cookies=False)
-    if path and info is not None:
-        return path, info
-    if COOKIES_FILE:
-        path2, info2, last_exc2 = _download_pass(url, video=video, quality=quality, use_cookies=True)
-        if path2 and info2 is not None:
-            return path2, info2
-        if last_exc2:
-            last_exc = last_exc2
+    last_exc: Exception | None = None
+    pool_size = max(1, proxy_pool_size())
+
+    for _ in range(pool_size):
+        path, info, exc1 = _download_pass(url, video=video, quality=quality, use_cookies=False)
+        if path and info is not None:
+            return path, info
+        if exc1:
+            last_exc = exc1
+
+        if COOKIES_FILE:
+            path2, info2, exc2 = _download_pass(url, video=video, quality=quality, use_cookies=True)
+            if path2 and info2 is not None:
+                return path2, info2
+            if exc2:
+                last_exc = exc2
+
+        if pool_size > 1:
+            rotate_proxy()
+
     if last_exc:
         raise last_exc
     raise RuntimeError("yt-dlp returned no usable file")
