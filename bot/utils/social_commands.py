@@ -65,12 +65,15 @@ async def _download_gif(url: str) -> str | None:
                 async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as s:
                     async with s.get(try_url, allow_redirects=True) as resp:
                         if resp.status != 200:
+                            logger.info("social: download %s status=%s — skipping", try_url, resp.status)
                             continue
                         ctype = (resp.headers.get("Content-Type") or "").lower()
                         if "text/html" in ctype:
+                            logger.info("social: download %s returned HTML — skipping", try_url)
                             continue
                         data = await resp.read()
                         if not data or len(data) < 512:
+                            logger.info("social: download %s body too small (%d bytes) — skipping", try_url, len(data) if data else 0)
                             continue
                 fd, path = tempfile.mkstemp(suffix=".mp4", prefix="social_gif_")
                 with os.fdopen(fd, "wb") as f:
@@ -133,24 +136,63 @@ async def _try_local_send(client, chat_id, path, caption, reply_to_id,
         return False
 
 
+async def _userbot_then_bot_upload(bot_client, chat_id, path, caption, reply_to_id) -> bool:
+    """Upload a local file via userbot first, then bot client. The
+    userbot path avoids the pyrofork+ntgcalls bot-client media-DC hang
+    and works in any chat the userbot is also a member of.
+    """
+    try:
+        from bot.client import userbot as _ub
+        # Prime the userbot peer cache. Without this, the FIRST
+        # send_animation call for a previously-unseen chat raises
+        # KeyError 'ID not found: <chat>' (pyrofork's resolve_peer lookup
+        # only knows chats it's seen updates for during the session).
+        # get_chat populates the cache, so the actual send below works
+        # on the first attempt instead of having to wait for some
+        # unrelated update to warm it.
+        try:
+            await _ub.get_chat(chat_id)
+        except Exception as exc:
+            logger.info("social: userbot.get_chat(%s) failed: %s — userbot may not be in this chat", chat_id, exc)
+        if await _try_local_send(_ub, chat_id, path, caption, None,
+                                  label="userbot", timeout=15):
+            return True
+    except Exception:
+        logger.exception("social: userbot path errored")
+
+    # Bot-client fallback. Short timeout (10s) because this path almost
+    # always hangs on this pyrofork+ntgcalls build — we don't want to
+    # make the user wait a minute for a failure we've seen before.
+    return await _try_local_send(bot_client, chat_id, path, caption,
+                                  reply_to_id, label="bot", timeout=10)
+
+
 async def send_media_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> bool:
     """Send the GIF via the best available path. Returns True on success.
 
+    `gif_url` can be:
+      - a local file path (preferred — durable, no external fetch)
+      - a Telegram file_id (instant, but bot-app-scoped)
+      - an http(s) URL (subject to host reachability + Telegram fetch)
+
     Order:
-      0. If `gif_url` is a Telegram file_id (not an http URL), send it
-         directly — instant, no external host, no download. THIS is the
-         recommended permanent fix: re-upload each GIF once via the bot
-         to capture a bot-usable file_id and put that string in the
-         caller's response table instead of a tmpfiles URL.
+      0a. Local file path — userbot upload, then bot upload.
+      0b. file_id — bot client direct (file_ids are bot-scoped, no
+          userbot path possible).
       1. URL-direct via bot client. Skipped for tmpfiles.org because it
          consistently returns WEBPAGE_CURL_FAILED.
-      2. Download once, upload via userbot (works in chats where the
-         assistant userbot is a member).
+      2. Download once, upload via userbot.
       3. Download once, upload via bot client (subject to the
          pyrofork+ntgcalls bot-client media-DC hang).
     """
-    # Path 0 — file_id direct. A file_id is not an http(s) URL.
+    # Path 0 — non-URL string. Either a local file path or a file_id.
     if not gif_url.lower().startswith(("http://", "https://")):
+        # 0a — local file path. Full userbot+bot upload fallback.
+        if os.path.isfile(gif_url):
+            return await _userbot_then_bot_upload(
+                bot_client, chat_id, gif_url, caption, reply_to_id,
+            )
+        # 0b — file_id (bot-only, no userbot since file_ids are scoped).
         try:
             await asyncio.wait_for(
                 bot_client.send_animation(
@@ -173,30 +215,9 @@ async def send_media_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> 
     if not local_path:
         return False
 
-    try:
-        from bot.client import userbot as _ub
-        # Prime the userbot peer cache. Without this, the FIRST
-        # send_animation call for a previously-unseen chat raises
-        # KeyError 'ID not found: <chat>' (pyrofork's resolve_peer lookup
-        # only knows chats it's seen updates for during the session).
-        # get_chat populates the cache, so the actual send below works
-        # on the first attempt instead of having to wait for some
-        # unrelated update to warm it.
-        try:
-            await _ub.get_chat(chat_id)
-        except Exception as exc:
-            logger.info("social: userbot.get_chat(%s) failed: %s — userbot may not be in this chat", chat_id, exc)
-        if await _try_local_send(_ub, chat_id, local_path, caption, None,
-                                  label="userbot", timeout=15):
-            return True
-    except Exception:
-        logger.exception("social: userbot path errored")
-
-    # Bot-client fallback. Short timeout (10s) because this path almost
-    # always hangs on this pyrofork+ntgcalls build — we don't want to
-    # make the user wait a minute for a failure we've seen before.
-    return await _try_local_send(bot_client, chat_id, local_path, caption,
-                                  reply_to_id, label="bot", timeout=10)
+    return await _userbot_then_bot_upload(
+        bot_client, chat_id, local_path, caption, reply_to_id,
+    )
 
 
 async def resolve_target(client, message):

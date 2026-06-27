@@ -14,6 +14,7 @@ with /pat goes through `bot.utils.social_commands` instead.
 
 import logging
 import random
+from pathlib import Path
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
@@ -41,17 +42,20 @@ _AURA_CAPTIONS = [
     '<emoji id="5269617691836058799">🪄</emoji> Mystic reading: {target} carries {n}% aura today',
 ]
 
-# tmpfiles.org share-page links — `_candidate_urls` (called inside
-# `send_media_gif`) auto-rewrites to the /dl/ form. This host is
-# known unreliable for both Telegram server-side fetch and direct bot
-# download. Working starting point, not guaranteed-reliable.
+# Local assets committed under bot/assets/aura/. Previously these were
+# tmpfiles.org share links, but tmpfiles is a temp host (~1h TTL) — the
+# GIFs kept 404ing once they expired, and every /aura fell through to
+# caption-only. Storing them in the repo makes them permanent and
+# removes the external-fetch dependency entirely. `send_media_gif`
+# detects local paths and routes via the userbot+bot upload fallback.
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "aura"
 _AURA_GIFS = [
-    "https://tmpfiles.org/w9wR7lfg4Jpn/sungjinwoo-sung-jin-woo.mp4",
-    "https://tmpfiles.org/wuwN76fTmnHo/piccolo-dbz.mp4",
-    "https://tmpfiles.org/wnwZ71f7mfbI/sanji-sanji-el-thor.mp4",
-    "https://tmpfiles.org/wTwE7gfKmtCS/jujutsu-kaisen-jujutsu.mp4",
-    "https://tmpfiles.org/wNwj7yfHPXwP/one-piece-zoro-vs-king.mp4",
-    "https://tmpfiles.org/wPwg7xfyPPJJ/jin-woo-anime-jin-woo.mp4",
+    str(_ASSETS_DIR / "01_sungjinwoo.mp4"),
+    str(_ASSETS_DIR / "02_piccolo.mp4"),
+    str(_ASSETS_DIR / "03_sanji.mp4"),
+    str(_ASSETS_DIR / "04_jjk.mp4"),
+    str(_ASSETS_DIR / "05_zoro.mp4"),
+    str(_ASSETS_DIR / "06_flins.mp4"),
 ]
 
 
