@@ -6,10 +6,10 @@ Triggers:
   /pat <user_id>
   /pat <text_mention> — Telegram text-mention entity
 
-Each call picks a random entry from `_CAPTIONS`. Each entry carries:
+Each call picks a random entry from `_RESPONSES`. Each entry carries:
   - a list of premium custom emoji ids (rendered as <emoji id="..."> tags)
   - a caption template using {e0}/{e1}/... slots and {user1}/{user2}
-  - an optional gif URL — Telegram fetches it server-side (we do NOT
+  - a gif URL — Telegram fetches it server-side (we do NOT
     upload from the bot, which hangs on this pyrofork build, same
     issue /kill hit)
 
@@ -17,32 +17,27 @@ If the gif URL fails, we fall back to a plain text reply with the
 same caption.
 
 Captions 1-5 are the original text-only set. Captions 6-10 add GIFs.
+
+Helpers (target resolution + GIF delivery chain) live in
+`bot.utils.social_commands` so /aura and any future similar command
+can reuse them without one plugin importing another. Plugin-to-plugin
+imports are banned in this repo.
 """
 
-import asyncio
 import logging
-import os
 import random
-import tempfile
 
-import aiohttp
 from pyrogram import Client, filters
-from pyrogram.enums import MessageEntityType, ParseMode
+from pyrogram.enums import ParseMode
+
+from bot.utils.social_commands import (
+    _FALLBACK,
+    attacker_mention,
+    resolve_target,
+    send_media_gif,
+)
 
 logger = logging.getLogger("RaidenShogun.pat")
-
-_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
-_gif_path_cache: dict[str, str] = {}
-_gif_cache_lock = asyncio.Lock()
-
-# Single fallback glyph for every <emoji id=...> tag. Non-premium clients
-# see this; premium clients see the animated custom emoji.
-_FALLBACK = "🤚"
-
-# Per-caption send timeout. tmpfiles.org via the /dl/ direct path
-# typically resolves in ~1s; 25s is room for both the fetch and the
-# Telegram-side ingest.
-_SEND_TIMEOUT = 25
 
 
 # Fixed (gif, caption) pairs — the unit /pat samples from. random.choice
@@ -150,202 +145,6 @@ def _render(template: str, emoji_ids: list[str], user1_mention: str, user2_menti
     return template.format(user1=user1_mention, user2=user2_mention, **tags)
 
 
-def _candidate_urls(url: str) -> list[str]:
-    """For tmpfiles.org, the share URL returns an HTML preview page;
-    the actual media is at /dl/<id>/<name>. Try both.
-    """
-    if not url:
-        return []
-    out = []
-    if "tmpfiles.org/" in url and "/dl/" not in url:
-        out.append(url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1))
-    out.append(url)
-    return out
-
-
-async def _download_gif(url: str) -> str | None:
-    """Download a GIF to /tmp once and cache the local path."""
-    async with _gif_cache_lock:
-        cached = _gif_path_cache.get(url)
-        if cached and os.path.exists(cached):
-            return cached
-        for try_url in _candidate_urls(url):
-            try:
-                async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as s:
-                    async with s.get(try_url, allow_redirects=True) as resp:
-                        if resp.status != 200:
-                            continue
-                        ctype = (resp.headers.get("Content-Type") or "").lower()
-                        if "text/html" in ctype:
-                            continue
-                        data = await resp.read()
-                        if not data or len(data) < 512:
-                            continue
-                fd, path = tempfile.mkstemp(suffix=".mp4", prefix="pat_gif_")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                _gif_path_cache[url] = path
-                logger.info("pat: cached %s → %s (%d bytes)", url, path, len(data))
-                return path
-            except Exception as exc:
-                logger.info("pat: download %s failed: %s", try_url, exc)
-        return None
-
-
-async def _try_url_send(client, chat_id, url, caption, reply_to_id) -> bool:
-    """Attempt URL-direct send_animation (Telegram fetches the URL).
-    Cheapest path; fails fast with WEBPAGE_CURL_FAILED for hosts Telegram
-    can't reach (tmpfiles.org returns that). 15s wait_for cap.
-    """
-    for try_url in _candidate_urls(url):
-        try:
-            await asyncio.wait_for(
-                client.send_animation(
-                    chat_id=chat_id, animation=try_url, caption=caption,
-                    parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
-                ),
-                timeout=15,
-            )
-            logger.info("pat: URL send OK via %s", try_url)
-            return True
-        except asyncio.TimeoutError:
-            logger.warning("pat: URL send timed out for %s", try_url)
-        except Exception as exc:
-            logger.info("pat: URL send failed for %s: %s", try_url, type(exc).__name__)
-    return False
-
-
-async def _try_local_send(client, chat_id, path, caption, reply_to_id,
-                           label: str, timeout: int = 20) -> bool:
-    """Upload a local file via send_animation, with a forced-cancel
-    timeout so a media-DC hang surfaces fast instead of stalling the
-    user's reply.
-    """
-    task = asyncio.create_task(client.send_animation(
-        chat_id=chat_id, animation=path, caption=caption,
-        parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
-    ))
-    try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-        logger.info("pat: %s upload OK", label)
-        return True
-    except asyncio.TimeoutError:
-        logger.warning("pat: %s upload timed out after %ss, cancelling", label, timeout)
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-        return False
-    except Exception as exc:
-        logger.info("pat: %s upload failed: %s", label, type(exc).__name__)
-        return False
-
-
-async def _send_pat_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> bool:
-    """Send the GIF via the best available path. Returns True on success.
-
-    Order:
-      0. If the entry is a Telegram file_id (not an http URL), send it
-         directly — instant, no external host, no download. THIS is the
-         recommended permanent fix: re-upload each GIF once via the bot
-         to capture a bot-usable file_id and put that string in
-         _RESPONSES instead of a tmpfiles URL.
-      1. URL-direct via bot client. Skipped for tmpfiles.org because it
-         consistently returns WEBPAGE_CURL_FAILED.
-      2. Download once, upload via userbot (works in chats where the
-         assistant userbot is a member).
-      3. Download once, upload via bot client (subject to the
-         pyrofork+ntgcalls bot-client media-DC hang).
-    """
-    # Path 0 — file_id direct. A file_id is not an http(s) URL.
-    if not gif_url.lower().startswith(("http://", "https://")):
-        try:
-            await asyncio.wait_for(
-                bot_client.send_animation(
-                    chat_id=chat_id, animation=gif_url, caption=caption,
-                    parse_mode=ParseMode.HTML, reply_to_message_id=reply_to_id,
-                ),
-                timeout=15,
-            )
-            logger.info("pat: file_id send OK")
-            return True
-        except Exception as exc:
-            logger.warning("pat: file_id send failed (%s) — asset may be deleted", type(exc).__name__)
-            return False
-
-    if "tmpfiles.org" not in gif_url:
-        if await _try_url_send(bot_client, chat_id, gif_url, caption, reply_to_id):
-            return True
-
-    local_path = await _download_gif(gif_url)
-    if not local_path:
-        return False
-
-    try:
-        from bot.client import userbot as _ub
-        # Prime the userbot peer cache. Without this, the FIRST
-        # send_animation call for a previously-unseen chat raises
-        # KeyError 'ID not found: <chat>' (pyrofork's resolve_peer lookup
-        # only knows chats it's seen updates for during the session).
-        # get_chat populates the cache, so the actual send below works
-        # on the first attempt instead of having to wait for some
-        # unrelated update to warm it.
-        try:
-            await _ub.get_chat(chat_id)
-        except Exception as exc:
-            logger.info("pat: userbot.get_chat(%s) failed: %s — userbot may not be in this chat", chat_id, exc)
-        if await _try_local_send(_ub, chat_id, local_path, caption, None,
-                                  label="userbot", timeout=15):
-            return True
-    except Exception:
-        logger.exception("pat: userbot path errored")
-
-    # Bot-client fallback. Short timeout (10s) because this path almost
-    # always hangs on this pyrofork+ntgcalls build — we don't want to
-    # make the user wait a minute for a failure we've seen before.
-    return await _try_local_send(bot_client, chat_id, local_path, caption,
-                                  reply_to_id, label="bot", timeout=10)
-
-
-async def _resolve_target(client, message):
-    """Return (user, mention_html) for the /pat target, or (None, None)."""
-    for ent in (message.entities or []):
-        if ent.type == MessageEntityType.TEXT_MENTION and ent.user:
-            return ent.user, ent.user.mention
-
-    reply = message.reply_to_message
-    if reply and reply.from_user:
-        return reply.from_user, reply.from_user.mention
-
-    if len(message.command) < 2:
-        return None, None
-
-    raw = message.command[1].lstrip("@")
-    from bot.client import userbot
-    try:
-        if raw.isdigit():
-            u = await client.get_users(int(raw))
-        else:
-            try:
-                u = await userbot.get_users(raw)
-            except Exception:
-                u = await client.get_users(raw)
-        return u, u.mention
-    except Exception:
-        if raw.isdigit():
-            uid = int(raw)
-            return None, f'<a href="tg://user?id={uid}">user {uid}</a>'
-        return None, None
-
-
-def _attacker_mention(message) -> str:
-    user = message.from_user
-    if not user:
-        return "someone"
-    return user.mention or (user.first_name or str(user.id))
-
-
 @Client.on_message(filters.command(["pat", "headpat"]))
 async def pat_command(client, message):
     logger.info(
@@ -357,9 +156,9 @@ async def pat_command(client, message):
     )
 
     try:
-        target, target_mention = await _resolve_target(client, message)
+        target, target_mention = await resolve_target(client, message)
     except Exception:
-        logger.exception("pat: _resolve_target raised")
+        logger.exception("pat: resolve_target raised")
         await message.reply_text("🤚 Couldn't resolve the target — try a different form.")
         return
 
@@ -372,13 +171,13 @@ async def pat_command(client, message):
         )
         return
 
-    attacker_mention = _attacker_mention(message)
+    sender_mention = attacker_mention(message)
 
     # Self-pat: still allowed but with a dedicated string so it doesn't look broken.
     if target and message.from_user and target.id == message.from_user.id:
         await message.reply_text(
             f'<emoji id="5215226264654213464">{_FALLBACK}</emoji> '
-            f"{attacker_mention} pats their own head.\n\n"
+            f"{sender_mention} pats their own head.\n\n"
             f"Self-care counts.",
             parse_mode=ParseMode.HTML,
         )
@@ -386,12 +185,12 @@ async def pat_command(client, message):
 
     # Single random pick — caption stays bonded to its GIF for this response.
     gif_url, emoji_ids, template = random.choice(_RESPONSES)
-    caption = _render(template, emoji_ids, attacker_mention, target_mention)
+    caption = _render(template, emoji_ids, sender_mention, target_mention)
 
     # Send as actual animation media with the caption merged on top —
-    # `_send_pat_gif` walks URL-direct → userbot upload → bot upload.
+    # `send_media_gif` walks URL-direct → userbot upload → bot upload.
     if gif_url:
-        ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
+        ok = await send_media_gif(client, message.chat.id, gif_url, caption, message.id)
         if ok:
             logger.info("pat: gif+caption reply ok")
             return
@@ -405,7 +204,7 @@ async def pat_command(client, message):
     except Exception:
         logger.exception("pat: HTML caption reply failed, retrying plain")
         plain = template.format(
-            user1=attacker_mention, user2=target_mention,
+            user1=sender_mention, user2=target_mention,
             **{f"e{i}": _FALLBACK for i in range(len(emoji_ids))},
         )
         try:

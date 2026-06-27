@@ -1,14 +1,15 @@
 """/aura — random aura check.
 
 Three independent rolls per call: n (0-100), caption template, GIF —
-no correlation between them. Reuses /pat's resolver and the full
-GIF-delivery chain (URL-direct → userbot download+upload → bot
-download+upload → caption-only) via `_send_pat_gif`, which internally
-walks `_candidate_urls` → `_download_gif` → `_try_url_send` →
-`_try_local_send`. We do NOT rebuild that chain here.
+no correlation between them. Reuses the resolver + GIF-delivery chain
+from `bot.utils.social_commands` (URL-direct → userbot
+download+upload → bot download+upload → caller handles caption-only
+fallback).
 
-Caption uses pyrofork's <emoji id="..."> tag (same convention as
-pat.py / start.py).
+Plugin-to-plugin imports are banned in this repo (pyrofork's
+plugins-root scanner gets confused by nested re-entrant imports of
+other plugin modules during handler registration). Anything shared
+with /pat goes through `bot.utils.social_commands` instead.
 """
 
 import logging
@@ -17,16 +18,10 @@ import random
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 
-# Reuse pat.py's helpers rather than duplicating. `_send_pat_gif`
-# delegates to `_candidate_urls`, `_download_gif`, `_try_url_send`,
-# `_try_local_send` internally — calling it IS reusing the whole chain.
-# `_attacker_mention` is documented in the spec as the reference style
-# for the target mention; `_resolve_target` already returns a mention
-# string in that same style, which is what we use.
-from bot.plugins.pat import (
+from bot.utils.social_commands import (
     _FALLBACK,
-    _resolve_target,
-    _send_pat_gif,
+    resolve_target,
+    send_media_gif,
 )
 
 logger = logging.getLogger("RaidenShogun.aura")
@@ -46,10 +41,9 @@ _AURA_CAPTIONS = [
 ]
 
 # tmpfiles.org share-page links — `_candidate_urls` (called inside
-# `_send_pat_gif`) auto-rewrites to the /dl/ form. This host is known
-# unreliable for both Telegram server-side fetch and direct bot
-# download (see pat.py comments). Working starting point, not
-# guaranteed-reliable.
+# `send_media_gif`) auto-rewrites to the /dl/ form. This host is
+# known unreliable for both Telegram server-side fetch and direct bot
+# download. Working starting point, not guaranteed-reliable.
 _AURA_GIFS = [
     "https://tmpfiles.org/w9wR7lfg4Jpn/sungjinwoo-sung-jin-woo.mp4",
     "https://tmpfiles.org/wuwN76fTmnHo/piccolo-dbz.mp4",
@@ -61,9 +55,8 @@ _AURA_GIFS = [
 
 
 def _render(template: str, target_mention: str, n: int) -> str:
-    """Local variant — aura templates use {target}+{n}, not pat's
-    {user1}/{user2}/{eN}. Kept separate to avoid changing /pat's
-    `_render` signature and risking its behavior.
+    """Local — aura templates use {target}+{n}, intentionally separate
+    from social_commands since pat's slots ({user1}/{user2}/{eN}) differ.
     """
     return template.format(target=target_mention, n=n)
 
@@ -83,6 +76,9 @@ def _strip_emoji_tags(template: str) -> str:
 
 @Client.on_message(filters.command("aura"))
 async def aura_command(client, message):
+    # Trip-wire: if this line doesn't appear in logs when /aura is sent,
+    # the handler isn't being bound at all (pyrofork scan issue, not a
+    # bug in the body below).
     logger.info(
         "aura_command fired in chat=%s by user=%s reply=%s",
         message.chat.id if message.chat else None,
@@ -91,13 +87,16 @@ async def aura_command(client, message):
     )
 
     try:
-        _target, target_mention = await _resolve_target(client, message)
+        _target, target_mention = await resolve_target(client, message)
     except Exception:
-        logger.exception("aura: _resolve_target raised")
+        logger.exception("aura: resolve_target raised")
         target_mention = None
 
     if target_mention is None:
-        await message.reply_text("Reply to someone with /aura to check their aura.")
+        try:
+            await message.reply_text("Reply to someone with /aura to check their aura.")
+        except Exception:
+            logger.exception("aura: usage reply failed")
         return
 
     # Three fully independent rolls — no correlation between them.
@@ -107,24 +106,30 @@ async def aura_command(client, message):
 
     caption = _render(template, target_mention, n)
 
-    # Reuse pat's full delivery chain: URL-direct → userbot upload →
-    # bot upload. Don't rebuild it here.
-    ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
+    # Full delivery chain: URL-direct → userbot upload → bot upload.
+    try:
+        ok = await send_media_gif(client, message.chat.id, gif_url, caption, message.id)
+    except Exception:
+        logger.exception("aura: send_media_gif raised")
+        ok = False
     if ok:
         return
     logger.info("aura: gif send failed across all paths — sending caption only")
 
-    # Graceful degradation — caption-only reply if every GIF path failed.
+    # Caption-only fallback (HTML first).
     try:
         await message.reply_text(
             caption, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
         )
+        return
     except Exception:
         logger.exception("aura: HTML caption reply failed, retrying plain")
-        try:
-            await message.reply_text(
-                _render(_strip_emoji_tags(template), target_mention, n),
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            logger.exception("aura: plain caption reply failed too")
+
+    # Last resort: strip <emoji> tags, send plain text.
+    try:
+        await message.reply_text(
+            _render(_strip_emoji_tags(template), target_mention, n),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.exception("aura: plain caption reply failed too")
