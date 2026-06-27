@@ -43,7 +43,7 @@ _RETRY_MARKERS = (
 )
 
 
-def _opts(client: str, *, video: bool, quality: str | None = None) -> dict:
+def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: bool = True) -> dict:
     outtmpl = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
     postprocessors: list[dict] = []
     merge_to_mp4 = False
@@ -58,9 +58,9 @@ def _opts(client: str, *, video: bool, quality: str | None = None) -> dict:
         except (TypeError, ValueError):
             cap = 720
         fmt = (
-            f"best[height<={cap}][ext=mp4]/"
             f"bestvideo[height<={cap}][ext=mp4]+bestaudio[ext=m4a]/"
             f"bestvideo[height<={cap}]+bestaudio/"
+            f"best[height<={cap}][ext=mp4]/"
             f"best[height<={cap}]/best"
         )
         merge_to_mp4 = True
@@ -80,14 +80,18 @@ def _opts(client: str, *, video: bool, quality: str | None = None) -> dict:
         "quiet": True,
         "noplaylist": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": [client]}},
         "remote_components": ["ejs:github"],
     }
+    # client="default" → let yt-dlp pick its multi-client default (gives
+    # access to split-stream formats up to 4K). Explicit names lock to a
+    # single client (used as fallbacks for the bot-wall path).
+    if client != "default":
+        opts["extractor_args"] = {"youtube": {"player_client": [client]}}
     if merge_to_mp4:
         opts["merge_output_format"] = "mp4"
     if postprocessors:
         opts["postprocessors"] = postprocessors
-    if COOKIES_FILE:
+    if use_cookies and COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
     return opts
 
@@ -116,12 +120,11 @@ def _final_path(info: dict, *, video: bool) -> str | None:
     return None
 
 
-def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple[str, dict]:
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+def _download_pass(url, *, video, quality, use_cookies) -> tuple[str | None, dict | None, Exception | None]:
     last_exc: Exception | None = None
-    for client in PLAYER_CLIENTS:
+    for client in ("default", *PLAYER_CLIENTS):
         try:
-            with YoutubeDL(_opts(client, video=video, quality=quality)) as ydl:
+            with YoutubeDL(_opts(client, video=video, quality=quality, use_cookies=use_cookies)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except (ExtractorError, DownloadError) as exc:
             last_exc = exc
@@ -131,13 +134,27 @@ def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple
         except Exception as exc:
             last_exc = exc
             continue
-
         if not isinstance(info, dict):
             continue
         path = _final_path(info, video=video)
         if path:
-            return path, info
+            return path, info, None
+    return None, None, last_exc
 
+
+def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple[str, dict]:
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    # Mirrors player._try_extract: anonymous pass first, then cookied
+    # fallback for auth-gated videos.
+    path, info, last_exc = _download_pass(url, video=video, quality=quality, use_cookies=False)
+    if path and info is not None:
+        return path, info
+    if COOKIES_FILE:
+        path2, info2, last_exc2 = _download_pass(url, video=video, quality=quality, use_cookies=True)
+        if path2 and info2 is not None:
+            return path2, info2
+        if last_exc2:
+            last_exc = last_exc2
     if last_exc:
         raise last_exc
     raise RuntimeError("yt-dlp returned no usable file")

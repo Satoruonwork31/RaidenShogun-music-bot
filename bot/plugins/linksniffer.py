@@ -18,6 +18,7 @@ import os
 import re
 
 from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.utils.downloader import check_size_and_duration, download_audio, download_video
@@ -261,9 +262,19 @@ async def link_sniffer(client, message):
     # original auto-download path (single quality, no choice to make).
     yt_id = _yt_video_id(url)
     if yt_id:
+        # Custom emoji premium-only fallback rendering: clients without
+        # premium will display the inner emoji. Button labels can't carry
+        # custom emojis at all (Bot API limitation) — the 🎵 prefix on the
+        # MP3 button is the closest available rendering.
+        caption = (
+            '<tg-emoji emoji-id="5866262183385501783">🎬</tg-emoji> '
+            "Pick a quality: "
+            '<tg-emoji emoji-id="5866262183385501783">🎬</tg-emoji>'
+        )
         try:
             await message.reply_text(
-                "🎬 Pick a quality:",
+                caption,
+                parse_mode=ParseMode.HTML,
                 reply_markup=_quality_keyboard(yt_id),
                 quote=True,
                 disable_web_page_preview=True,
