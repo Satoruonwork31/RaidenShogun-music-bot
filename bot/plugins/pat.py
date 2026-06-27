@@ -384,31 +384,28 @@ async def pat_command(client, message):
         )
         return
 
-    # Single random pick — gif_url is kept for future use (file_id pass)
-    # but skipped at runtime. /pat behavior matches /aura: caption-only
-    # send, no GIF delivery attempts, since tmpfiles.org URLs fail more
-    # often than they work and the fallback chain just adds latency.
+    # Single random pick — caption + raw GIF URL appended so Telegram
+    # renders the URL preview inline. No upload/download attempts; the
+    # tmpfiles URL goes straight in the body.
     gif_url, emoji_ids, template = random.choice(_RESPONSES)
     caption = _render(template, emoji_ids, attacker_mention, target_mention)
+    body = f"{caption}\n\n{gif_url}" if gif_url else caption
 
-    # CAPTION-ONLY. Under no circumstances does this path include the gif
-    # URL in the message body — the user must never see the raw tmpfiles
-    # link as plain text.
     try:
         await message.reply_text(
-            caption,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
+            body, parse_mode=ParseMode.HTML, disable_web_page_preview=False,
         )
-        logger.info("pat: caption-only reply ok")
+        logger.info("pat: caption+url reply ok")
     except Exception:
-        logger.exception("pat: HTML caption reply failed, retrying plain")
-        # Last-ditch: strip emoji tags. Still no URL.
+        logger.exception("pat: HTML reply failed, retrying plain")
         plain = template.format(
             user1=attacker_mention, user2=target_mention,
             **{f"e{i}": _FALLBACK for i in range(len(emoji_ids))},
         )
         try:
-            await message.reply_text(plain, disable_web_page_preview=True)
+            await message.reply_text(
+                f"{plain}\n\n{gif_url}" if gif_url else plain,
+                disable_web_page_preview=False,
+            )
         except Exception:
-            logger.exception("pat: plain caption reply failed too")
+            logger.exception("pat: plain reply failed too")
