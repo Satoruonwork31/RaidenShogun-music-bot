@@ -67,12 +67,17 @@ async def aura_command(client, message):
         target, target_mention = await _resolve_target(client, message)
     except Exception:
         logger.exception("aura: _resolve_target raised")
-        await message.reply_text("📡 Couldn't resolve the target — try a different form.")
-        return
+        target, target_mention = None, None
 
+    # No reply, no @user, no user_id → default to the sender themselves.
     if target_mention is None:
-        await message.reply_text("📡 Reply to someone with /aura to check their aura.")
-        return
+        sender = message.from_user
+        if sender is not None:
+            target = sender
+            target_mention = sender.mention or sender.first_name or str(sender.id)
+        else:
+            await message.reply_text("📡 Couldn't figure out whose aura to check.")
+            return
 
     # Three fully independent rolls.
     n = random.randint(0, 100)
