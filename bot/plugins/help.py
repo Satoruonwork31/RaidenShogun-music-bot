@@ -70,6 +70,8 @@ HELP_PAGES: list[tuple[str, str]] = [
         "• /stats - (sudo) bot stats and version info\n"
         "• /broadcast - (sudo) push a message to every chat\n"
         "• /seeddm - (sudo) seed user IDs into the broadcast registry\n"
+        "• /blist - (sudo) ignore every message from a user\n"
+        "• /unblist (alias /removeblist) - (sudo) remove a user from the blacklist\n"
         "• /addsudo - (owner) grant sudo to a user\n"
         "• /delsudo (alias /removesudo) - (owner) revoke sudo\n"
         "• /sudolist - (sudo) list current sudoers",
