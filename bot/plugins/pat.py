@@ -384,18 +384,16 @@ async def pat_command(client, message):
         )
         return
 
-    # Single random pick — gif_url and caption stay bonded.
+    # Single random pick — gif_url is kept for future use (file_id pass)
+    # but skipped at runtime. /pat behavior matches /aura: caption-only
+    # send, no GIF delivery attempts, since tmpfiles.org URLs fail more
+    # often than they work and the fallback chain just adds latency.
     gif_url, emoji_ids, template = random.choice(_RESPONSES)
     caption = _render(template, emoji_ids, attacker_mention, target_mention)
 
-    ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
-    if ok:
-        return
-    logger.info("pat: gif send failed across all paths — sending caption only (no URL)")
-
-    # CAPTION-ONLY fallback. Under no circumstances does this path include
-    # the gif URL in the message body — the user must never see the raw
-    # tmpfiles link as plain text.
+    # CAPTION-ONLY. Under no circumstances does this path include the gif
+    # URL in the message body — the user must never see the raw tmpfiles
+    # link as plain text.
     try:
         await message.reply_text(
             caption,
