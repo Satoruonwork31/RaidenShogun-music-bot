@@ -53,6 +53,7 @@ HELP_PAGES: list[tuple[str, str]] = [
         "• /toss - Toss a coin\n"
         "• /kill - Attempt to kill another user (50/50 outcome)\n"
         "• /pat - Give someone a wholesome headpat\n"
+        "• /aura - Check someone's aura level (0-100)\n"
         "• /celebrate &lt;occasion&gt; - bday/anniversary/promotion/win/welcome-back\n\n"
         '🔗 <b>Auto-download</b>\n'
         "Paste a YouTube, Instagram, or Pinterest link in any chat — I'll fetch the video and post it back.\n\n"
