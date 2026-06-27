@@ -432,15 +432,24 @@ async def ydl_callback(client, cq):
     _PICK_DONE.add(key)
 
     is_audio = quality == "mp3"
-    label = "MP3 audio" if is_audio else f"{quality}p"
+    label = "MP3 Audio" if is_audio else f"{quality}p"
     await cq.answer(f"Downloading {label}…")
+
+    status_box = (
+        f'<tg-emoji emoji-id="5866262183385501783">🎬</tg-emoji> {label}\n'
+        "\n"
+        "╭──────────────╮\n"
+        '<tg-emoji emoji-id="5818687127000452892">🔍</tg-emoji> ʀᴇsᴏʟᴠɪɴɢ sᴛʀᴇᴀᴍ...\n'
+        '<tg-emoji emoji-id="5443127283898405358">⬇️</tg-emoji> ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ\n'
+        "╰──────────────╯"
+    )
 
     url = f"https://www.youtube.com/watch?v={vid}"
     path = None
     reply_to_id = msg.reply_to_message.id if msg.reply_to_message else None
     try:
         try:
-            await msg.edit_text(f"🔍 Probing {label}…", reply_markup=None)
+            await msg.edit_text(status_box, parse_mode=ParseMode.HTML, reply_markup=None)
         except Exception:
             pass
 
@@ -456,7 +465,6 @@ async def ydl_callback(client, cq):
             await msg.edit_text(f"❌ {too_big}")
             return
 
-        await msg.edit_text(f"⬇️ Downloading {label}: {title}")
         if is_audio:
             path, info = await asyncio.to_thread(download_audio, url)
         else:
