@@ -137,7 +137,21 @@ PLAYER_CLIENTS = [
 ]
 
 
-def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool = True) -> dict:
+def _is_youtube_url(url: str) -> bool:
+    """The SOCKS5 proxy pool is YouTube-only.
+
+    Instagram / Pinterest / etc. work fine from the bot's direct IP but
+    get rate-limited or blocked when routed through a shared free
+    proxy whose IP other scrapers have already burned. So apply the
+    proxy and the YT-specific multi-pass logic only to YouTube URLs.
+    """
+    if not isinstance(url, str):
+        return False
+    u = url.lower()
+    return "youtube.com" in u or "youtu.be" in u
+
+
+def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool = True, use_proxy: bool = True) -> dict:
     fmt = "best[height<=720]/best" if video else "bestaudio/best"
     opts = {
         "format": fmt,
@@ -150,9 +164,10 @@ def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool
         opts["extractor_args"] = {"youtube": {"player_client": [client]}}
     if use_cookies and COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
-    proxy = current_proxy()
-    if proxy:
-        opts["proxy"] = proxy
+    if use_proxy:
+        proxy = current_proxy()
+        if proxy:
+            opts["proxy"] = proxy
     if extra:
         opts.update(extra)
     return opts
@@ -187,7 +202,7 @@ def _has_real_media(info, *, video: bool) -> bool:
     return False
 
 
-def _extract_pass(url_or_query, extra, *, video, use_cookies):
+def _extract_pass(url_or_query, extra, *, video, use_cookies, use_proxy=True):
     """One iteration over PLAYER_CLIENTS with a fixed cookie policy.
 
     Returns (info_dict_or_None, last_exc, bot_check_count).
@@ -196,7 +211,7 @@ def _extract_pass(url_or_query, extra, *, video, use_cookies):
     bot_check_count = 0
     for client in ("default", *PLAYER_CLIENTS):
         try:
-            with YoutubeDL(_opts_for(client, extra, video=video, use_cookies=use_cookies)) as ydl:
+            with YoutubeDL(_opts_for(client, extra, video=video, use_cookies=use_cookies, use_proxy=use_proxy)) as ydl:
                 info = ydl.extract_info(url_or_query, download=False)
             if info and _has_real_media(info, video=video):
                 return info, last_exc, bot_check_count
@@ -221,13 +236,25 @@ def _extract_pass(url_or_query, extra, *, video, use_cookies):
 
 
 def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = False) -> dict | None:
-    """Two-pass extract (anon → cookied) wrapped in a proxy rotation loop.
+    """Two-pass extract (anon → cookied) with proxy rotation for YouTube.
 
-    Each iteration of the outer loop uses one proxy from the pool. If
-    every client under both passes fails for that proxy, we rotate to
-    the next proxy and try again. Cap = pool size, so a totally dead
-    pool returns the last error rather than spinning forever.
+    Non-YouTube URLs (Instagram, Pinterest, SoundCloud, etc.) go direct
+    — no proxy, no cookies, single pass. Free shared SOCKS5 IPs are
+    rate-limited or blocklisted by those services, and the YT-specific
+    fallbacks waste latency for no benefit.
     """
+    is_yt = _is_youtube_url(url_or_query)
+
+    if not is_yt:
+        info, last_exc, _ = _extract_pass(
+            url_or_query, extra, video=video, use_cookies=False, use_proxy=False,
+        )
+        if info is not None:
+            return info
+        if last_exc:
+            raise last_exc
+        return None
+
     last_exc: Exception | None = None
     bot_no_cookies = 0
     bot_with_cookies = 0
@@ -235,7 +262,7 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
 
     for _ in range(pool_size):
         info, exc1, b1 = _extract_pass(
-            url_or_query, extra, video=video, use_cookies=False,
+            url_or_query, extra, video=video, use_cookies=False, use_proxy=True,
         )
         if info is not None:
             return info
@@ -245,7 +272,7 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
 
         if COOKIES_FILE:
             info, exc2, b2 = _extract_pass(
-                url_or_query, extra, video=video, use_cookies=True,
+                url_or_query, extra, video=video, use_cookies=True, use_proxy=True,
             )
             if info is not None:
                 return info
@@ -253,11 +280,9 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
                 last_exc = exc2
             bot_with_cookies = max(bot_with_cookies, b2)
 
-        # No success under this proxy — try the next one.
         if pool_size > 1:
             rotate_proxy()
 
-    # All proxies × all passes failed.
     if (bot_no_cookies or bot_with_cookies) and (not COOKIES_FILE or bot_with_cookies):
         raise YouTubeAuthRequiredError(
             "Every proxy / player client hit the YouTube bot-check or returned no playable formats."

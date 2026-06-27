@@ -22,6 +22,7 @@ from yt_dlp.utils import DownloadError, ExtractorError
 from bot.utils.player import (
     COOKIES_FILE,
     PLAYER_CLIENTS,
+    _is_youtube_url,
     current_proxy,
     proxy_pool_size,
     rotate_proxy,
@@ -49,7 +50,7 @@ _RETRY_MARKERS = (
 )
 
 
-def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: bool = True) -> dict:
+def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: bool = True, use_proxy: bool = True) -> dict:
     outtmpl = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
     postprocessors: list[dict] = []
     merge_to_mp4 = False
@@ -99,9 +100,10 @@ def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: 
         opts["postprocessors"] = postprocessors
     if use_cookies and COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
-    proxy = current_proxy()
-    if proxy:
-        opts["proxy"] = proxy
+    if use_proxy:
+        proxy = current_proxy()
+        if proxy:
+            opts["proxy"] = proxy
     return opts
 
 
@@ -129,11 +131,11 @@ def _final_path(info: dict, *, video: bool) -> str | None:
     return None
 
 
-def _download_pass(url, *, video, quality, use_cookies) -> tuple[str | None, dict | None, Exception | None]:
+def _download_pass(url, *, video, quality, use_cookies, use_proxy=True) -> tuple[str | None, dict | None, Exception | None]:
     last_exc: Exception | None = None
     for client in ("default", *PLAYER_CLIENTS):
         try:
-            with YoutubeDL(_opts(client, video=video, quality=quality, use_cookies=use_cookies)) as ydl:
+            with YoutubeDL(_opts(client, video=video, quality=quality, use_cookies=use_cookies, use_proxy=use_proxy)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except (ExtractorError, DownloadError) as exc:
             last_exc = exc
@@ -152,24 +154,40 @@ def _download_pass(url, *, video, quality, use_cookies) -> tuple[str | None, dic
 
 
 def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple[str, dict]:
-    """Anon → cookied passes wrapped in a proxy rotation loop.
+    """Anon → cookied passes, proxy-rotated, but only for YouTube.
 
-    Mirrors player._try_extract — one proxy per outer iteration, rotate
-    on failure, cap at pool size.
+    Non-YT URLs go direct, single pass, no cookies — see
+    player._try_extract for the rationale.
     """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    is_yt = _is_youtube_url(url)
+
+    if not is_yt:
+        path, info, last_exc = _download_pass(
+            url, video=video, quality=quality, use_cookies=False, use_proxy=False,
+        )
+        if path and info is not None:
+            return path, info
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("yt-dlp returned no usable file")
+
     last_exc: Exception | None = None
     pool_size = max(1, proxy_pool_size())
 
     for _ in range(pool_size):
-        path, info, exc1 = _download_pass(url, video=video, quality=quality, use_cookies=False)
+        path, info, exc1 = _download_pass(
+            url, video=video, quality=quality, use_cookies=False, use_proxy=True,
+        )
         if path and info is not None:
             return path, info
         if exc1:
             last_exc = exc1
 
         if COOKIES_FILE:
-            path2, info2, exc2 = _download_pass(url, video=video, quality=quality, use_cookies=True)
+            path2, info2, exc2 = _download_pass(
+                url, video=video, quality=quality, use_cookies=True, use_proxy=True,
+            )
             if path2 and info2 is not None:
                 return path2, info2
             if exc2:
