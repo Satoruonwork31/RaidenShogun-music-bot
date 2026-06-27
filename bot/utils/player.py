@@ -15,6 +15,23 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import ExtractorError, DownloadError
 
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
+INSTAGRAM_COOKIES_FILE = os.getenv("INSTAGRAM_COOKIES_FILE", "")
+
+
+def cookies_for_url(url) -> str:
+    """Pick the right cookies file for a URL. Returns "" if none configured.
+
+    Instagram and YouTube each block datacenter IPs unless requests come
+    from a logged-in browser session, but they use entirely separate
+    cookie jars — feeding YT cookies into IG (or vice versa) does
+    nothing and risks confusing yt-dlp's extractor. Dispatch by host.
+    """
+    if not isinstance(url, str):
+        return COOKIES_FILE
+    u = url.lower()
+    if ("instagram.com" in u or "instagr.am" in u) and INSTAGRAM_COOKIES_FILE:
+        return INSTAGRAM_COOKIES_FILE
+    return COOKIES_FILE
 
 
 class YouTubeAuthRequiredError(Exception):
@@ -151,7 +168,7 @@ def _is_youtube_url(url: str) -> bool:
     return "youtube.com" in u or "youtu.be" in u
 
 
-def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool = True, use_proxy: bool = True) -> dict:
+def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool = True, use_proxy: bool = True, cookies_path: str | None = None) -> dict:
     fmt = "best[height<=720]/best" if video else "bestaudio/best"
     opts = {
         "format": fmt,
@@ -162,8 +179,10 @@ def _opts_for(client: str, extra=None, *, video: bool = False, use_cookies: bool
     }
     if client != "default":
         opts["extractor_args"] = {"youtube": {"player_client": [client]}}
-    if use_cookies and COOKIES_FILE:
-        opts["cookiefile"] = COOKIES_FILE
+    if use_cookies:
+        ck = cookies_path if cookies_path is not None else COOKIES_FILE
+        if ck:
+            opts["cookiefile"] = ck
     if use_proxy:
         proxy = current_proxy()
         if proxy:
@@ -202,7 +221,7 @@ def _has_real_media(info, *, video: bool) -> bool:
     return False
 
 
-def _extract_pass(url_or_query, extra, *, video, use_cookies, use_proxy=True):
+def _extract_pass(url_or_query, extra, *, video, use_cookies, use_proxy=True, cookies_path=None):
     """One iteration over PLAYER_CLIENTS with a fixed cookie policy.
 
     Returns (info_dict_or_None, last_exc, bot_check_count).
@@ -211,7 +230,7 @@ def _extract_pass(url_or_query, extra, *, video, use_cookies, use_proxy=True):
     bot_check_count = 0
     for client in ("default", *PLAYER_CLIENTS):
         try:
-            with YoutubeDL(_opts_for(client, extra, video=video, use_cookies=use_cookies, use_proxy=use_proxy)) as ydl:
+            with YoutubeDL(_opts_for(client, extra, video=video, use_cookies=use_cookies, use_proxy=use_proxy, cookies_path=cookies_path)) as ydl:
                 info = ydl.extract_info(url_or_query, download=False)
             if info and _has_real_media(info, video=video):
                 return info, last_exc, bot_check_count
@@ -246,8 +265,12 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
     is_yt = _is_youtube_url(url_or_query)
 
     if not is_yt:
+        # Non-YouTube: direct, no proxy, no rotation, but per-host
+        # cookies if configured (e.g. INSTAGRAM_COOKIES_FILE for IG).
+        ig_cookies = cookies_for_url(url_or_query)
         info, last_exc, _ = _extract_pass(
-            url_or_query, extra, video=video, use_cookies=False, use_proxy=False,
+            url_or_query, extra, video=video,
+            use_cookies=bool(ig_cookies), use_proxy=False, cookies_path=ig_cookies or None,
         )
         if info is not None:
             return info

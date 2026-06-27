@@ -23,6 +23,7 @@ from bot.utils.player import (
     COOKIES_FILE,
     PLAYER_CLIENTS,
     _is_youtube_url,
+    cookies_for_url,
     current_proxy,
     proxy_pool_size,
     rotate_proxy,
@@ -50,7 +51,7 @@ _RETRY_MARKERS = (
 )
 
 
-def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: bool = True, use_proxy: bool = True) -> dict:
+def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: bool = True, use_proxy: bool = True, cookies_path: str | None = None) -> dict:
     outtmpl = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
     postprocessors: list[dict] = []
     merge_to_mp4 = False
@@ -98,8 +99,10 @@ def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: 
         opts["merge_output_format"] = "mp4"
     if postprocessors:
         opts["postprocessors"] = postprocessors
-    if use_cookies and COOKIES_FILE:
-        opts["cookiefile"] = COOKIES_FILE
+    if use_cookies:
+        ck = cookies_path if cookies_path is not None else COOKIES_FILE
+        if ck:
+            opts["cookiefile"] = ck
     if use_proxy:
         proxy = current_proxy()
         if proxy:
@@ -131,11 +134,11 @@ def _final_path(info: dict, *, video: bool) -> str | None:
     return None
 
 
-def _download_pass(url, *, video, quality, use_cookies, use_proxy=True) -> tuple[str | None, dict | None, Exception | None]:
+def _download_pass(url, *, video, quality, use_cookies, use_proxy=True, cookies_path=None) -> tuple[str | None, dict | None, Exception | None]:
     last_exc: Exception | None = None
     for client in ("default", *PLAYER_CLIENTS):
         try:
-            with YoutubeDL(_opts(client, video=video, quality=quality, use_cookies=use_cookies, use_proxy=use_proxy)) as ydl:
+            with YoutubeDL(_opts(client, video=video, quality=quality, use_cookies=use_cookies, use_proxy=use_proxy, cookies_path=cookies_path)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except (ExtractorError, DownloadError) as exc:
             last_exc = exc
@@ -163,8 +166,10 @@ def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple
     is_yt = _is_youtube_url(url)
 
     if not is_yt:
+        ig_cookies = cookies_for_url(url)
         path, info, last_exc = _download_pass(
-            url, video=video, quality=quality, use_cookies=False, use_proxy=False,
+            url, video=video, quality=quality,
+            use_cookies=bool(ig_cookies), use_proxy=False, cookies_path=ig_cookies or None,
         )
         if path and info is not None:
             return path, info
