@@ -9,8 +9,12 @@ bot's own ChatMember.privileges — generic admin status does not imply
 that right (same lesson as the invite-link rights in playback.py).
 """
 
+import logging
+
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
+
+logger = logging.getLogger("RaidenShogun.pin")
 
 _ADMIN_STATUSES = (ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR)
 
@@ -72,14 +76,29 @@ async def pin_command(client, message):
     args = [a.lower() for a in message.command[1:]]
     loud = any(a in ("loud", "notify") for a in args)
 
+    logger.info(
+        "pin attempt: chat=%s reply_msg_id=%s reply_thread=%s loud=%s reply_repr=%r",
+        message.chat.id, reply.id,
+        getattr(reply, "message_thread_id", None),
+        loud, reply,
+    )
     try:
-        await client.pin_chat_message(
+        result = await client.pin_chat_message(
             chat_id=message.chat.id,
             message_id=reply.id,
             disable_notification=not loud,
         )
+        logger.info("pin_chat_message returned type=%s value=%r", type(result).__name__, result)
     except Exception as exc:
-        await message.reply_text(f"❌ Pin failed: {exc}")
+        logger.exception(
+            "pin failed: type=%s id=%s message=%s",
+            type(exc).__name__, getattr(exc, "ID", None), getattr(exc, "MESSAGE", None),
+        )
+        await message.reply_text(
+            f"❌ Pin failed: {type(exc).__name__}"
+            + (f" [{exc.ID}]" if getattr(exc, "ID", None) else "")
+            + f": {getattr(exc, 'MESSAGE', None) or exc}"
+        )
         return
 
     await message.reply_text(f"📌 Pinned by {message.from_user.mention}.")
