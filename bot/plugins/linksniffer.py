@@ -18,7 +18,7 @@ import os
 import re
 
 from pyrogram import Client, filters
-from pyrogram.enums import ParseMode
+from pyrogram.enums import ButtonStyle, ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.utils.downloader import check_size_and_duration, download_audio, download_video
@@ -62,16 +62,36 @@ def _is_pinterest(url: str) -> bool:
     return "pinterest." in u or "pin.it/" in u
 
 
+_MP3_BUTTON_EMOJI_ID = "6030616017569320738"
+
+
 def _quality_keyboard(vid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("480p", callback_data=f"ydl|480|{vid}"),
-                InlineKeyboardButton("720p", callback_data=f"ydl|720|{vid}"),
+                InlineKeyboardButton(
+                    "480p",
+                    callback_data=f"ydl|480|{vid}",
+                    style=ButtonStyle.SUCCESS,
+                ),
+                InlineKeyboardButton(
+                    "720p",
+                    callback_data=f"ydl|720|{vid}",
+                    style=ButtonStyle.PRIMARY,
+                ),
             ],
             [
-                InlineKeyboardButton("1080p", callback_data=f"ydl|1080|{vid}"),
-                InlineKeyboardButton("🎵 MP3 Audio", callback_data=f"ydl|mp3|{vid}"),
+                InlineKeyboardButton(
+                    "1080p",
+                    callback_data=f"ydl|1080|{vid}",
+                    style=ButtonStyle.SUCCESS,
+                ),
+                InlineKeyboardButton(
+                    "MP3 Audio",
+                    callback_data=f"ydl|mp3|{vid}",
+                    style=ButtonStyle.PRIMARY,
+                    icon_custom_emoji_id=_MP3_BUTTON_EMOJI_ID,
+                ),
             ],
         ]
     )
@@ -262,14 +282,9 @@ async def link_sniffer(client, message):
     # original auto-download path (single quality, no choice to make).
     yt_id = _yt_video_id(url)
     if yt_id:
-        # Custom emoji premium-only fallback rendering: clients without
-        # premium will display the inner emoji. Button labels can't carry
-        # custom emojis at all (Bot API limitation) — the 🎵 prefix on the
-        # MP3 button is the closest available rendering.
         caption = (
             '<tg-emoji emoji-id="5866262183385501783">🎬</tg-emoji> '
-            "Pick a quality: "
-            '<tg-emoji emoji-id="5866262183385501783">🎬</tg-emoji>'
+            "Pick a quality:"
         )
         try:
             await message.reply_text(

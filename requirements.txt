@@ -1,4 +1,4 @@
-pyrofork==2.3.69
+kurigram==2.2.21
 py-tgcalls==2.3.3
 TgCrypto==1.2.5
 python-dotenv==1.2.2
