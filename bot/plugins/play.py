@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from pyrogram import Client, filters
 from pyrogram.enums import ChatType, ParseMode
@@ -8,6 +9,8 @@ from bot.utils import queue as q
 from bot.utils.np_ui import nowplaying_keyboard, render_for_chat
 from bot.utils.playback import ensure_userbot_in_chat, play_track
 from bot.utils.resolver import resolve
+
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 logger = logging.getLogger("RaidenShogun.play")
 
@@ -38,6 +41,18 @@ def _replied_media(message):
     return None, None
 
 
+def _replied_url(message):
+    """First URL in the replied message's text or caption, or None."""
+    reply = message.reply_to_message
+    if not reply:
+        return None
+    body = reply.text or reply.caption or ""
+    if not body:
+        return None
+    m = _URL_RE.search(str(body))
+    return m.group(0) if m else None
+
+
 def _requester_name(message) -> str:
     user = message.from_user
     if not user:
@@ -54,8 +69,15 @@ async def _do_play(client, message, *, is_video: bool):
         return
 
     replied_media, replied_label = _replied_media(message)
+    # Reply-to-link: only used when no command args and no replied media,
+    # so explicit args still win.
+    replied_url = (
+        _replied_url(message)
+        if (len(message.command) < 2 and not replied_media)
+        else None
+    )
 
-    if len(message.command) < 2 and not replied_media:
+    if len(message.command) < 2 and not replied_media and not replied_url:
         await message.reply_text(
             f"🎵 Please provide a song name or link, or reply to an audio/video "
             f"message with {label_cmd}.\n\n"
@@ -64,7 +86,8 @@ async def _do_play(client, message, *, is_video: bool):
             "• Spotify track link\n"
             "• Resso song link\n"
             "• SoundCloud track link\n"
-            "• Uploaded audio/voice/video (reply with the command)"
+            "• Uploaded audio/voice/video (reply with the command)\n"
+            "• Reply to any message containing a link with the command"
         )
         return
 
@@ -82,7 +105,7 @@ async def _do_play(client, message, *, is_video: bool):
             await status.edit_text(f"❌ Download failed: {exc}")
             return
     else:
-        query = " ".join(message.command[1:])
+        query = replied_url if replied_url else " ".join(message.command[1:])
         status = await message.reply_text(f"🔍 Resolving: {query}")
         logger.info("resolve(%r, video=%s) for chat=%s", query, is_video, message.chat.id)
         stream_url, info = await resolve(query, video=is_video)
