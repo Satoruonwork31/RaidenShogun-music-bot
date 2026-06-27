@@ -77,12 +77,13 @@ def _shift_entities_for_body(message, body_start: int):
 async def _send_one(client, chat_id: int, *, reply, body: str, body_entities):
     """Returns (sent_message, error_class_name_or_None).
 
-    For replied-message broadcasts we use `forward_messages(drop_author=True)`
-    rather than `Message.copy()`: copy() routes media through
-    `send_cached_media` WITHOUT parse_mode=DISABLED, which re-parses
-    caption_entities and strips premium custom emoji. `forward_messages` is
-    a Telegram-native forward with the sender attribution removed, so
-    entities (including <emoji id="..."> custom emoji) survive byte-for-byte.
+    For replied-message broadcasts we use forward_messages with
+    hide_sender_name=True (kurigram's name for the same flag pyrofork
+    called drop_author) rather than Message.copy(): copy() routes media
+    through send_cached_media WITHOUT parse_mode=DISABLED, which
+    re-parses caption_entities and strips premium custom emoji. The
+    native forward keeps entities (including <emoji id="..."> custom
+    emoji) byte-for-byte.
 
     For text-mode broadcasts we pass `entities=...` explicitly so the
     caller-extracted (and offset-shifted) custom-emoji entities are kept
@@ -93,7 +94,7 @@ async def _send_one(client, chat_id: int, *, reply, body: str, body_entities):
             chat_id=chat_id,
             from_chat_id=reply.chat.id,
             message_ids=reply.id,
-            drop_author=True,
+            hide_sender_name=True,
             disable_notification=True,
         )
         result = forwarded[0] if isinstance(forwarded, list) else forwarded
