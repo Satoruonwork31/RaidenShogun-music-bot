@@ -20,6 +20,7 @@ from pyrogram.enums import ParseMode
 
 from bot.utils.social_commands import (
     _FALLBACK,
+    attacker_mention,
     resolve_target,
     send_media_gif,
 )
@@ -92,12 +93,9 @@ async def aura_command(client, message):
         logger.exception("aura: resolve_target raised")
         target_mention = None
 
+    # No reply / no resolvable target → check the sender's own aura.
     if target_mention is None:
-        try:
-            await message.reply_text("Reply to someone with /aura to check their aura.")
-        except Exception:
-            logger.exception("aura: usage reply failed")
-        return
+        target_mention = attacker_mention(message)
 
     # Three fully independent rolls — no correlation between them.
     n = random.randint(0, 100)
