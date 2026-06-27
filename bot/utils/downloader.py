@@ -69,7 +69,14 @@ def _opts(client: str, *, video: bool, quality: str | None = None, use_cookies: 
             f"bestvideo[height<={cap}][ext=mp4]+bestaudio[ext=m4a]/"
             f"bestvideo[height<={cap}]+bestaudio/"
             f"best[height<={cap}][ext=mp4]/"
-            f"best[height<={cap}]/best"
+            f"best[height<={cap}]/"
+            # Pinterest serves HLS split video+audio with no muxed
+            # format and weird heights (vertical), so the height-capped
+            # branches above may all miss. Final fallback ignores the
+            # cap and accepts any merge or any single format yt-dlp
+            # can pick — better to deliver at the wrong cap than to
+            # 'format not available' the user.
+            f"bestvideo+bestaudio/best"
         )
         merge_to_mp4 = True
     else:
@@ -121,7 +128,7 @@ def _final_path(info: dict, *, video: bool) -> str | None:
     vid_id = info.get("id")
     if vid_id and os.path.isdir(DOWNLOAD_DIR):
         # Postprocessor renames the extension; search by id prefix.
-        good_exts_video = (".mp4", ".mkv", ".webm", ".mov")
+        good_exts_video = (".mp4", ".mkv", ".webm", ".mov", ".m4v", ".ts")
         good_exts_audio = (".mp3",)
         for fn in sorted(os.listdir(DOWNLOAD_DIR), key=len, reverse=True):
             if not fn.startswith(vid_id + "."):
