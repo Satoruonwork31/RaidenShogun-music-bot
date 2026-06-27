@@ -384,28 +384,31 @@ async def pat_command(client, message):
         )
         return
 
-    # Single random pick — caption + raw GIF URL appended so Telegram
-    # renders the URL preview inline. No upload/download attempts; the
-    # tmpfiles URL goes straight in the body.
+    # Single random pick — caption stays bonded to its GIF for this response.
     gif_url, emoji_ids, template = random.choice(_RESPONSES)
     caption = _render(template, emoji_ids, attacker_mention, target_mention)
-    body = f"{caption}\n\n{gif_url}" if gif_url else caption
 
+    # Send as actual animation media with the caption merged on top —
+    # `_send_pat_gif` walks URL-direct → userbot upload → bot upload.
+    if gif_url:
+        ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
+        if ok:
+            logger.info("pat: gif+caption reply ok")
+            return
+        logger.info("pat: gif send failed across all paths — sending caption only")
+
+    # Text-only fallback: caption alone, no URL paste.
     try:
         await message.reply_text(
-            body, parse_mode=ParseMode.HTML, disable_web_page_preview=False,
+            caption, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
         )
-        logger.info("pat: caption+url reply ok")
     except Exception:
-        logger.exception("pat: HTML reply failed, retrying plain")
+        logger.exception("pat: HTML caption reply failed, retrying plain")
         plain = template.format(
             user1=attacker_mention, user2=target_mention,
             **{f"e{i}": _FALLBACK for i in range(len(emoji_ids))},
         )
         try:
-            await message.reply_text(
-                f"{plain}\n\n{gif_url}" if gif_url else plain,
-                disable_web_page_preview=False,
-            )
+            await message.reply_text(plain, disable_web_page_preview=True)
         except Exception:
-            logger.exception("pat: plain reply failed too")
+            logger.exception("pat: plain caption reply failed too")

@@ -85,19 +85,25 @@ async def aura_command(client, message):
     gif_url = random.choice(_AURA_GIFS)
 
     caption = _render(template, target_mention, n)
-    body = f"{caption}\n\n{gif_url}" if gif_url else caption
 
+    # Send as actual animation media with the caption merged on top —
+    # `_send_pat_gif` walks URL-direct → userbot upload → bot upload.
+    ok = await _send_pat_gif(client, message.chat.id, gif_url, caption, message.id)
+    if ok:
+        return
+    logger.info("aura: gif send failed across all paths — sending caption only")
+
+    # Text-only fallback: caption alone, no URL paste.
     try:
         await message.reply_text(
-            body, parse_mode=ParseMode.HTML, disable_web_page_preview=False,
+            caption, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
         )
     except Exception:
-        logger.exception("aura: HTML reply failed, retrying plain")
-        plain = _render(_strip_emoji_tags(template), target_mention, n)
+        logger.exception("aura: HTML caption reply failed, retrying plain")
         try:
             await message.reply_text(
-                f"{plain}\n\n{gif_url}" if gif_url else plain,
-                disable_web_page_preview=False,
+                _render(_strip_emoji_tags(template), target_mention, n),
+                disable_web_page_preview=True,
             )
         except Exception:
-            logger.exception("aura: plain reply failed too")
+            logger.exception("aura: plain caption reply failed too")
