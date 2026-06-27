@@ -22,6 +22,21 @@ def _rebind_pyrofork_loops() -> None:
         client.dispatcher.loop = loop
 
 
+async def _stage(name: str, coro):
+    """Run a startup coroutine, log the stage that failed before re-raising.
+
+    Bare tracebacks from a failed `userbot.start()` look identical to a
+    failed `app.start()` in journalctl — both show a Telegram client
+    error with no hint at which client. Wrapping each step in a named
+    stage tag makes the failure point obvious without changing behaviour.
+    """
+    try:
+        return await coro
+    except Exception:
+        logger.exception("Startup failed at stage: %s", name)
+        raise
+
+
 async def _run():
     # Step 1 — fix pyrofork's loop capture so handlers fire.
     _rebind_pyrofork_loops()
@@ -40,9 +55,9 @@ async def _run():
     # do `from bot.utils.music import music` will name-bind the live
     # instance correctly.
     logger.info("Starting RaidenShogun Music Bot")
-    await userbot.start()
-    await music_mod.music.start()
-    await app.start()
+    await _stage("userbot.start", userbot.start())
+    await _stage("music.start", music_mod.music.start())
+    await _stage("app.start (bot + plugin load)", app.start())
 
     # Backfill the /broadcast chat registry from the userbot's perspective.
     from bot.utils.discover import backfill_common_chats

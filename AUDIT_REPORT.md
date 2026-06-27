@@ -1,6 +1,56 @@
 # RaidenShogun Music Bot — Audit Report
 
-Date: 2026-06-24 (initial), 2026-06-25 (delta), 2026-06-27 (delta below)
+Date: 2026-06-24 (initial), 2026-06-25 (delta), 2026-06-27 (delta below),
+2026-06-27 [session 2 delta]
+
+## 2026-06-27 [session 2] — Delta
+
+Adversarial verification of prior fix claims (no live Telegram, static
+only). Walking back into the repo with a fresh clone.
+
+Confirmed REAL fixes (still good):
+- **CRIT-2 (placeholder handlers)** — every plugin reads as a real
+  handler calling live PyTgCalls / queue / playback code. Re-checked:
+  pause, resume, skip, stop, queue, vplay, vskip, song, video. None
+  are placeholder `reply_text` stubs.
+- **CRIT-3 (no queue)** — `bot/utils/queue.py` is a full Track-based
+  queue with locking, history deque, shuffle, repeat. Used by
+  play.py, playback.py, skip.py, stop.py, queue.py.
+
+Newly found this pass:
+- **CRIT-1 was MIS-DESCRIBED.** Previous deltas claimed `.env` was
+  un-tracked. It was NOT — commit `75c969b "Update BOT_TOKEN in .env
+  file"` re-added the file after the earlier untrack-commit. `.env`
+  was being tracked as of clone, with live API_ID, API_HASH,
+  BOT_TOKEN, STRING_SESSION, and OWNER_ID. Also: `.gitignore` did
+  not match `.env`. Fixed both this session — `git rm --cached .env`
+  + added `.env`, `.env.*`, `!.env.example` to .gitignore. The
+  values must still be rotated by the user; this commit does not
+  retroactively purge history.
+
+Resolved this pass:
+- **MED-1 (no startup exception handler)** — added `_stage(name, coro)`
+  helper in bot/start.py. Each of userbot.start / music.start /
+  app.start now logs `Startup failed at stage: <name>` before
+  re-raising. journalctl now identifies WHICH client failed.
+- **MED-6 (bot/utils/youtube.py purpose)** — confirmed dead (single
+  `import yt_dlp` line, zero importers). DELETED.
+- **dead ptb_main.py** — 830 lines, deprecated, zero importers. DELETED.
+
+Still open:
+- **CRIT-1 (history purge + credential rotation)** — credentials are
+  out in the open. Rotate BOT_TOKEN (@BotFather), terminate
+  the userbot session (Telegram → Settings → Devices), and either
+  `git filter-repo --invert-paths --path .env` + force-push, or
+  accept the leak and rotate. BLOCKED on user action.
+- **HIGH-3 (assistant auto-invite)** — partial. `ensure_userbot_in_chat`
+  handles public chats via username (no admin-rights dependency) and
+  private chats via invite link (bot must be admin). Working but the
+  no-admin private-chat case still surfaces an error.
+- **MED-4 (/help re-audit)** — unchanged.
+- **LOW-2, LOW-3, LOW-4, LOW-6** — unchanged.
+
+## 2026-06-27 — Delta
 
 ## 2026-06-27 — Delta
 

@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-27 (requirements pinned, dead code dropped, ptb_main.py deprecated)
+Last updated: 2026-06-27 (session: stop tracking .env, delete dead code, named startup stages, .env.example added)
 
 ## Project Overview
 
@@ -58,14 +58,19 @@ admin /ban /unban, /id resolver, /toss, /greetings on|off toggle.
 - bot/utils/greetings.py        — per-chat on/off flag persisted to greetings.json.
 - bot/plugins/*.py              — one file per /command. See "Known Bugs" — most music
                                   plugins are stubs.
-- ptb_main.py                   — PARALLEL 830-line python-telegram-bot implementation
-                                  (NOT what main.py runs, NOT in requirements.txt).
-                                  Has real handlers for play/pause/skip/stop/etc.
+- ptb_main.py                   — DELETED 2026-06-27. Was a 830-line python-telegram-bot
+                                  parallel implementation. Never wired up; pyrogram path is canonical.
+                                  Reference handlers already ported (ensure_userbot_in_chat etc.).
 - scripts/install.sh            — VPS one-shot: apt deps + venv + systemd unit pointing
                                   at main.py. Service name: raiden-musicbot.
-- requirements.txt              — pyrofork, py-tgcalls, tgcrypto, python-dotenv, yt-dlp,
-                                  aiohttp, Pillow. NO PIN. NO python-telegram-bot.
-- .env                          — committed to git history (see Known Bugs / CRITICAL #1).
+- requirements.txt              — kurigram==2.2.21, py-tgcalls==2.3.3, TgCrypto==1.2.5,
+                                  python-dotenv==1.2.2, yt-dlp>=2026.6.9, aiohttp==3.14.1,
+                                  Pillow==12.2.0. (kurigram is a pyrogram fork; code still
+                                  does `from pyrogram import ...`.)
+- .env                          — UNTRACKED as of 2026-06-27 (was re-added to tracking
+                                  after the earlier untrack-commit got reverted).
+                                  .gitignore now matches it. History-purge still pending.
+- .env.example                  — committed template for new deployers.
 
 ## Current Features (what actually works in the deployed pyrogram path)
 
@@ -102,6 +107,76 @@ See AUDIT_REPORT.md for the prioritized list and severity. High-level:
 - MEDIUM: bot/utils/queue.py is dead code.
 
 ## Fix History
+
+### 2026-06-27 — `.env` un-tracked, dead code deleted, named startup stages
+
+Static-only pass. New session, fresh clone, no specific user symptom
+reported. Verified earlier "FIXED" claims against current code before
+making changes.
+
+Verified (adversarial review of prior fix claims):
+- CRIT-2 (placeholder handlers) — REALLY fixed. Re-read pause/resume/
+  skip/stop/queue/vplay/vskip/song/video. All call live PyTgCalls / queue
+  / playback code; none are placeholder reply_text. Marking confirmed.
+- CRIT-3 (no queue) — REALLY fixed. queue.py is a fully populated
+  Track/dataclass module with locking, history deque, shuffle, repeat.
+
+Newly found and addressed this pass:
+- .gitignore did NOT match `.env`. `git check-ignore -v .env` returned
+  exit 1. Worse: `.env` was actually still TRACKED in the repo
+  (75c969b "Update BOT_TOKEN in .env file" re-added it after the
+  earlier untrack-commit). The credentials in .env were live in the
+  public repo at clone time. Action: `git rm --cached .env` + added
+  `.env` / `.env.*` / `!.env.example` to .gitignore. The values must
+  still be rotated by the user (CRIT-1 history-purge pending).
+- bot/utils/youtube.py — single-line `import yt_dlp`, zero importers.
+  DELETED. (MED-6 closed.)
+- ptb_main.py — 830 lines, deprecated, zero importers. DELETED. The
+  ensure_userbot_in_chat behaviour it modelled is already in
+  bot/utils/playback.py.
+- bot/start.py — MED-1 closed. Wrapped each startup step (userbot.start,
+  music.start, app.start) in a `_stage(name, coro)` helper that logs
+  `Startup failed at stage: <name>` before re-raising. journalctl will
+  now show WHICH stage failed instead of a bare TelegramError.
+
+Files added:
+- .env.example — template with the env vars the deployer needs, plus
+  notes on session-string danger and cookies caveats.
+
+Files changed:
+- .gitignore — added `.env`, `.env.*`, `!.env.example` under Environments.
+- bot/start.py — `_stage` helper + 3 wrapped awaits in `_run`.
+- context.txt — this entry + struct updates above + Fix History.
+- AUDIT_REPORT.md — delta block below.
+
+Files deleted:
+- bot/utils/youtube.py
+- ptb_main.py
+
+Files un-tracked (still on disk locally):
+- .env
+
+Audit items closed: MED-1, MED-6. CRIT-1 partial (current copy
+untracked + gitignore fixed; history-purge + rotation still required
+from user).
+
+Audit items still open:
+- CRIT-1 (history purge + credential rotation — BLOCKED on user).
+- HIGH-3 (assistant auto-invite — partial; depends on bot admin perms).
+- MED-4 (/help re-audit now that the commands are real).
+
+Verification performed:
+- py_compile across bot/ + main.py: PASS.
+- py_compile of remaining scripts: PASS.
+- `git check-ignore -v .env` exits 0 after the .gitignore edit and
+  the rm --cached.
+- All claimed CRIT-2 fixes re-read; every plugin proven to call live
+  PyTgCalls / queue / playback APIs.
+
+Verification NOT performed:
+- Live Telegram smoke. Will not be done until the leaked credentials
+  in .env are rotated. Running with the now-public BOT_TOKEN and
+  STRING_SESSION would be unsafe.
 
 ### 2026-06-27 — Pinning, dead code, ptb deprecation, minor cleanups
 
