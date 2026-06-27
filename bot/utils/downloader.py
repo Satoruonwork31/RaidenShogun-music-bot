@@ -43,13 +43,27 @@ _RETRY_MARKERS = (
 )
 
 
-def _opts(client: str, *, video: bool) -> dict:
+def _opts(client: str, *, video: bool, quality: str | None = None) -> dict:
     outtmpl = os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s")
+    postprocessors: list[dict] = []
+    merge_to_mp4 = False
     if video:
-        # Prefer a muxed mp4 ≤720p so Telegram's inline player works out of
-        # the box. Fall back to whatever yt-dlp can produce.
-        fmt = "best[height<=720][ext=mp4]/best[height<=720]/best"
-        postprocessors: list[dict] = []
+        # quality: "480" | "720" | "1080" | None (=> 720 default).
+        # Modern YouTube splits >=720p into video-only + audio-only streams,
+        # so a single muxed-mp4 selector would fail with "format not
+        # available". Try muxed first (cheap, no ffmpeg work), then fall
+        # through to bestvideo+bestaudio (yt-dlp will merge via ffmpeg).
+        try:
+            cap = int(quality) if quality else 720
+        except (TypeError, ValueError):
+            cap = 720
+        fmt = (
+            f"best[height<={cap}][ext=mp4]/"
+            f"bestvideo[height<={cap}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={cap}]+bestaudio/"
+            f"best[height<={cap}]/best"
+        )
+        merge_to_mp4 = True
     else:
         fmt = "bestaudio/best"
         postprocessors = [
@@ -69,6 +83,8 @@ def _opts(client: str, *, video: bool) -> dict:
         "extractor_args": {"youtube": {"player_client": [client]}},
         "remote_components": ["ejs:github"],
     }
+    if merge_to_mp4:
+        opts["merge_output_format"] = "mp4"
     if postprocessors:
         opts["postprocessors"] = postprocessors
     if COOKIES_FILE:
@@ -100,12 +116,12 @@ def _final_path(info: dict, *, video: bool) -> str | None:
     return None
 
 
-def _try_download(url: str, *, video: bool) -> tuple[str, dict]:
+def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple[str, dict]:
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     last_exc: Exception | None = None
     for client in PLAYER_CLIENTS:
         try:
-            with YoutubeDL(_opts(client, video=video)) as ydl:
+            with YoutubeDL(_opts(client, video=video, quality=quality)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except (ExtractorError, DownloadError) as exc:
             last_exc = exc
@@ -154,5 +170,5 @@ def download_audio(url: str) -> tuple[str, dict]:
     return _try_download(url, video=False)
 
 
-def download_video(url: str) -> tuple[str, dict]:
-    return _try_download(url, video=True)
+def download_video(url: str, quality: str | None = None) -> tuple[str, dict]:
+    return _try_download(url, video=True, quality=quality)

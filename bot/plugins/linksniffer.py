@@ -18,8 +18,9 @@ import os
 import re
 
 from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.utils.downloader import check_size_and_duration, download_video
+from bot.utils.downloader import check_size_and_duration, download_audio, download_video
 from bot.utils.player import YouTubeAuthRequiredError, _try_extract
 
 logger = logging.getLogger("RaidenShogun.linksniffer")
@@ -44,9 +45,35 @@ _URL_RE = re.compile(
 )
 
 
+_YT_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:[^&]*&)*v=|shorts/|live/|embed/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})"
+)
+
+
+def _yt_video_id(url: str) -> str | None:
+    m = _YT_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
 def _is_pinterest(url: str) -> bool:
     u = url.lower()
     return "pinterest." in u or "pin.it/" in u
+
+
+def _quality_keyboard(vid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("480p", callback_data=f"ydl|480|{vid}"),
+                InlineKeyboardButton("720p", callback_data=f"ydl|720|{vid}"),
+            ],
+            [
+                InlineKeyboardButton("1080p", callback_data=f"ydl|1080|{vid}"),
+                InlineKeyboardButton("🎵 MP3 Audio", callback_data=f"ydl|mp3|{vid}"),
+            ],
+        ]
+    )
 
 
 def _has_video_stream(probe) -> bool:
@@ -229,6 +256,22 @@ async def link_sniffer(client, message):
     url = _normalise(match.group(0))
     chat_id = message.chat.id
 
+    # YouTube links → ask for quality; the actual download happens in the
+    # callback handler below. Pinterest/Instagram fall through to the
+    # original auto-download path (single quality, no choice to make).
+    yt_id = _yt_video_id(url)
+    if yt_id:
+        try:
+            await message.reply_text(
+                "🎬 Pick a quality:",
+                reply_markup=_quality_keyboard(yt_id),
+                quote=True,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            logger.exception("link_sniffer: posting quality picker failed")
+        return
+
     if _seen_recently(chat_id, url):
         return
 
@@ -341,3 +384,97 @@ async def link_sniffer(client, message):
                 pass
         async with _BUSY_LOCK:
             _BUSY.discard(chat_id)
+
+
+# Picker callback: (chat_id, message_id) we've already started downloading for.
+_PICK_DONE: set[tuple[int, int]] = set()
+
+
+@Client.on_callback_query(filters.regex(r"^ydl\|(480|720|1080|mp3)\|([A-Za-z0-9_-]{11})$"))
+async def ydl_callback(client, cq):
+    parts = cq.data.split("|")
+    quality, vid = parts[1], parts[2]
+    msg = cq.message
+    if msg is None or msg.chat is None:
+        await cq.answer("Lost the message — paste the link again.", show_alert=True)
+        return
+
+    key = (msg.chat.id, msg.id)
+    if key in _PICK_DONE:
+        await cq.answer("Already processing.", show_alert=False)
+        return
+    _PICK_DONE.add(key)
+
+    is_audio = quality == "mp3"
+    label = "MP3 audio" if is_audio else f"{quality}p"
+    await cq.answer(f"Downloading {label}…")
+
+    url = f"https://www.youtube.com/watch?v={vid}"
+    path = None
+    reply_to_id = msg.reply_to_message.id if msg.reply_to_message else None
+    try:
+        try:
+            await msg.edit_text(f"🔍 Probing {label}…", reply_markup=None)
+        except Exception:
+            pass
+
+        try:
+            probe = await asyncio.to_thread(_try_extract, url, None, video=not is_audio)
+        except YouTubeAuthRequiredError:
+            await msg.edit_text(YouTubeAuthRequiredError.USER_MESSAGE)
+            return
+
+        title = (probe.get("title") if isinstance(probe, dict) else None) or "video"
+        too_big = check_size_and_duration(probe or {})
+        if too_big:
+            await msg.edit_text(f"❌ {too_big}")
+            return
+
+        await msg.edit_text(f"⬇️ Downloading {label}: {title}")
+        if is_audio:
+            path, info = await asyncio.to_thread(download_audio, url)
+        else:
+            path, info = await asyncio.to_thread(download_video, url, quality)
+
+        info = info or {}
+        await msg.edit_text(f"📤 Uploading: {title}")
+
+        if is_audio:
+            await client.send_audio(
+                chat_id=msg.chat.id,
+                audio=path,
+                caption=f"🎵 {title}",
+                title=title,
+                performer=info.get("uploader") or info.get("channel") or "Unknown",
+                duration=int(info.get("duration") or 0),
+                reply_to_message_id=reply_to_id,
+            )
+        else:
+            await client.send_video(
+                chat_id=msg.chat.id,
+                video=path,
+                caption=f"🎬 {title} ({label})",
+                duration=int(info.get("duration") or 0),
+                width=int(info.get("width") or 0),
+                height=int(info.get("height") or 0),
+                supports_streaming=True,
+                reply_to_message_id=reply_to_id,
+            )
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+    except Exception as exc:
+        logger.exception("ydl_callback failed vid=%s quality=%s", vid, quality)
+        try:
+            await msg.edit_text(f"❌ Failed: {type(exc).__name__}: {exc}")
+        except Exception:
+            pass
+    finally:
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        _PICK_DONE.discard(key)
