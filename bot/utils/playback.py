@@ -71,12 +71,20 @@ async def end_session(chat_id: int) -> None:
 async def ensure_userbot_in_chat(client_app, chat_id: int) -> tuple[bool, str]:
     """Make sure the userbot is a member of `chat_id`. Returns (ok, detail).
 
-    Used before /play so the assistant can re-enter a group it left after
-    a previous playback session.
+    Two paths, picked by chat visibility:
+      • Public chat (chat.username set) → userbot.join_chat(username).
+        No dependence on the BOT's invite-link rights — a username is a
+        public address any account can use to walk in.
+      • Private chat (no username) → bot exports an invite link, userbot
+        joins via the link. Requires the bot to be admin with invite
+        rights, hence the older code's failure mode.
+
+    Public-path failures get logged with exc type+message so we can tell
+    a Telegram per-account cap (TooManyChannels, FloodWait) apart from a
+    chat-side restriction (CHAT_INVALID, USERNAME_INVALID).
     """
     from pyrogram.enums import ChatMemberStatus
 
-    # Already in?
     try:
         me = await userbot.get_me()
         member = await userbot.get_chat_member(chat_id, me.id)
@@ -85,14 +93,43 @@ async def ensure_userbot_in_chat(client_app, chat_id: int) -> tuple[bool, str]:
     except Exception as exc:
         logger.debug("ensure_userbot_in_chat: presence probe failed: %s", exc)
 
-    # Try the invite-link route. Needs the bot to be admin with invite rights.
+    username = None
+    try:
+        chat = await client_app.get_chat(chat_id)
+        username = getattr(chat, "username", None)
+    except Exception as exc:
+        logger.debug("ensure_userbot_in_chat: get_chat(%s) failed: %s", chat_id, exc)
+
+    if username:
+        try:
+            await userbot.join_chat(username)
+            logger.info("ensure_userbot_in_chat: userbot joined %s via username @%s", chat_id, username)
+            return True, "joined via username"
+        except Exception as exc:
+            logger.warning(
+                "ensure_userbot_in_chat: username join failed for %s (@%s): %s: %s",
+                chat_id, username, type(exc).__name__, exc,
+            )
+            # Don't fall through to invite link for public chats — if the
+            # username path failed, the cause is almost certainly per-
+            # account (rate limit, channel cap, ban) and inviting via a
+            # link won't help. Surface that to the operator.
+            return False, (
+                f"Assistant couldn't join @{username}: {type(exc).__name__}: {exc}\n"
+                "Likely cause: the assistant account is rate-limited, "
+                "hit the per-account group cap, or is banned from this chat."
+            )
+
     try:
         link = await client_app.export_chat_invite_link(chat_id)
         await userbot.join_chat(link)
         logger.info("ensure_userbot_in_chat: userbot joined %s via invite link", chat_id)
         return True, "joined via invite link"
     except Exception as exc:
-        logger.warning("ensure_userbot_in_chat: invite-link join failed for %s: %s", chat_id, exc)
+        logger.warning(
+            "ensure_userbot_in_chat: invite-link join failed for %s: %s: %s",
+            chat_id, type(exc).__name__, exc,
+        )
         return False, (
             "Assistant isn't in the group and I couldn't auto-invite it.\n"
             "Either make me a group admin with invite rights, or invite the assistant account manually."
