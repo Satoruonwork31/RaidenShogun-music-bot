@@ -179,21 +179,32 @@ async def broadcast_command(client, message):
         )
         return
 
+    n_dms = sum(1 for c in targets if c > 0)
+    n_groups = len(targets) - n_dms
     status = await message.reply_text(
-        f"📣 Broadcasting to {len(targets)} chat(s)…"
+        f"📣 Broadcasting to {len(targets)} chat(s) "
+        f"({n_groups} group(s) + {n_dms} DM(s))…"
     )
 
     sent = 0
+    sent_dms = 0
+    sent_groups = 0
     pinned = 0
     failed = 0
     forgotten = 0
 
     for chat_id in targets:
+        kind = "DM" if chat_id > 0 else "group"
         try:
             bcast, _ = await _send_one(
                 client, chat_id, reply=reply, body=body_text, body_entities=body_entities
             )
             sent += 1
+            if chat_id > 0:
+                sent_dms += 1
+            else:
+                sent_groups += 1
+            logger.info("broadcast → %s %s OK", kind, chat_id)
             if await _maybe_pin(client, bcast):
                 pinned += 1
         except FloodWait as fw:
@@ -242,7 +253,7 @@ async def broadcast_command(client, message):
 
     summary = (
         f"📣 Broadcast complete.\n\n"
-        f"✅ Sent: {sent}\n"
+        f"✅ Sent: {sent}  ({sent_groups} group(s), {sent_dms} DM(s))\n"
         f"📌 Pinned: {pinned}\n"
         f"❌ Failed: {failed}\n"
         f"🗑️ Forgotten (kicked/blocked/dead): {forgotten}"
