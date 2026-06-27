@@ -145,8 +145,19 @@ async def _do_play(client, message, *, is_video: bool):
     try:
         await play_track(message.chat.id, track)
     except Exception as exc:
-        logger.exception("play_track raised")
-        await status.edit_text(f"❌ Playback failed: {type(exc).__name__}: {exc}")
+        # TelegramServerError / RPCError subclasses carry .ID and .MESSAGE
+        # — surface those so the operator sees CALL_OCCUPY_FAILED /
+        # GROUPCALL_INVALID / etc. instead of the bare class name.
+        exc_id = getattr(exc, "ID", None)
+        exc_msg = getattr(exc, "MESSAGE", None)
+        logger.exception(
+            "play_track raised: type=%s id=%s message=%s repr=%r",
+            type(exc).__name__, exc_id, exc_msg, exc,
+        )
+        ui_id = f" [{exc_id}]" if exc_id else ""
+        await status.edit_text(
+            f"❌ Playback failed: {type(exc).__name__}{ui_id}: {exc_msg or exc}"
+        )
         return
 
     # Render the Now Playing card. Old short reply is gone — the

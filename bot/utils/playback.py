@@ -158,14 +158,31 @@ async def play_track(chat_id: int, track: q.Track) -> None:
         logger.warning("userbot.get_chat(%s) failed before play: %s", chat_id, exc)
 
     stream = _build_stream(track)
+    # Diagnostic: dump the MediaStream's resolved attrs and the on-disk
+    # status of the media path so we can tell URL-vs-local-file and
+    # missing-file cases apart in the log.
+    import os as _os
+    src = track.stream_url or ""
+    is_url = src.startswith(("http://", "https://"))
+    on_disk = (not is_url) and bool(src) and _os.path.exists(src)
+    size = _os.path.getsize(src) if on_disk else None
     logger.info(
-        "music.play(chat=%s) video=%s url_head=%s",
-        chat_id, track.is_video, (track.stream_url or "")[:80],
+        "music.play(chat=%s) video=%s is_url=%s on_disk=%s size=%s url_head=%s "
+        "stream_attrs={_media_path=%r _audio_path=%r _ffmpeg=%r _ytdlp=%r}",
+        chat_id, track.is_video, is_url, on_disk, size, src[:120],
+        getattr(stream, "_media_path", None),
+        getattr(stream, "_audio_path", None),
+        getattr(stream, "_ffmpeg_parameters", None),
+        getattr(stream, "_ytdlp_parameters", None),
     )
     try:
         await music_mod.music.play(chat_id, stream)
-    except Exception:
-        logger.exception("music.play raised in chat=%s", chat_id)
+    except Exception as exc:
+        logger.exception(
+            "music.play raised in chat=%s: type=%s id=%s message=%s repr=%r",
+            chat_id, type(exc).__name__,
+            getattr(exc, "ID", None), getattr(exc, "MESSAGE", None), exc,
+        )
         raise
     logger.info("music.play returned cleanly for chat=%s", chat_id)
     q.set_current(chat_id, track)
