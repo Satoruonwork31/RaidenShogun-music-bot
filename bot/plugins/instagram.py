@@ -1,11 +1,17 @@
-"""Instagram auto-downloader — proxyless, cookieless.
+"""Instagram auto-downloader — proxyless, cookies-enabled.
 
 Inspired by an aiogram-flavored "send sticker → download → swap"
 handler from another project. Reimplemented in Pyrogram/kurigram
-for this bot. No cookies, no proxy, no fallback chain — one direct
-yt-dlp attempt, an Instagram mobile UA to maximise the chance of
-success, and a per-URL file_id cache so re-shared links re-deliver
-instantly without re-downloading.
+for this bot. No proxy, no fallback chain — one direct yt-dlp
+attempt, an Instagram mobile UA to maximise the chance of success,
+and a per-URL file_id cache so re-shared links re-deliver instantly
+without re-downloading.
+
+Cookies: uses the existing `INSTAGRAM_COOKIES_FILE` master jar via
+`bot.utils.player.cookies_for_url()`, which copies it to a tempfile
+per request so yt-dlp's writeback can't degrade the master. Cookies
+are required for IG in 2026 — anonymous requests from datacenter
+IPs get "empty media response" every time.
 
 Flow:
   1. URL matched (reel / p / tv / stories) → status message
@@ -36,6 +42,8 @@ from yt_dlp import YoutubeDL
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
+
+from bot.utils.player import cookies_for_url
 
 logger = logging.getLogger("RaidenShogun.instagram")
 
@@ -119,7 +127,7 @@ def _mention_html(user) -> str:
 
 def _download_blocking(url: str, out_dir: str) -> str | None:
     """Run yt-dlp synchronously; return the first downloaded media path
-    or None. Proxyless, cookieless, age_limit=100, IG mobile UA.
+    or None. Proxyless, cookies-via-tempfile, age_limit=100, IG mobile UA.
     """
     opts = {
         "quiet": True,
@@ -136,6 +144,11 @@ def _download_blocking(url: str, out_dir: str) -> str | None:
         # we detect failure by checking for downloaded files.
         "ignoreerrors": True,
     }
+    # Tempfile copy of instagram_cookies.txt — yt-dlp will write its
+    # post-request jar to the tempfile, master stays pristine.
+    ck = cookies_for_url(url)
+    if ck:
+        opts["cookiefile"] = ck
     try:
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
