@@ -136,20 +136,34 @@ async def _try_local_send(client, chat_id, path, caption, reply_to_id,
         return False
 
 
-async def _userbot_then_bot_upload(bot_client, chat_id, path, caption, reply_to_id) -> bool:
-    """Upload a local file via userbot first, then bot client. The
-    userbot path avoids the pyrofork+ntgcalls bot-client media-DC hang
-    and works in any chat the userbot is also a member of.
+async def _bot_then_userbot_upload(bot_client, chat_id, path, caption, reply_to_id) -> bool:
+    """Upload a local file via the BOT first, then userbot as fallback.
+
+    Bot-first is the right default for command replies — the bot owns
+    the /pat and /aura commands, so its account must be the one
+    visibly replying. The userbot is only a fallback for groups where
+    the bot's send_animation fails (the pyrofork+ntgcalls media-DC
+    hang that originally motivated routing through the userbot).
+
+    Tradeoff: in chats where the bot upload hangs, the user waits up
+    to 15s before the userbot path takes over. Worth it to keep the
+    reply branded as the bot in every group (especially in chats
+    where the userbot happens to have media-send rights and would
+    otherwise steal the reply — observed in one operator's "Lesbian
+    club" group).
     """
+    # Bot client first — gets a real chance with a generous timeout.
+    if await _try_local_send(bot_client, chat_id, path, caption,
+                              reply_to_id, label="bot", timeout=15):
+        return True
+
+    # Userbot fallback for chats where the bot hangs. Prime the
+    # userbot peer cache first — without this, the FIRST send_animation
+    # call for a previously-unseen chat raises KeyError 'ID not found:
+    # <chat>' (pyrofork's resolve_peer lookup only knows chats it's
+    # seen updates for during the session).
     try:
         from bot.client import userbot as _ub
-        # Prime the userbot peer cache. Without this, the FIRST
-        # send_animation call for a previously-unseen chat raises
-        # KeyError 'ID not found: <chat>' (pyrofork's resolve_peer lookup
-        # only knows chats it's seen updates for during the session).
-        # get_chat populates the cache, so the actual send below works
-        # on the first attempt instead of having to wait for some
-        # unrelated update to warm it.
         try:
             await _ub.get_chat(chat_id)
         except Exception as exc:
@@ -158,13 +172,9 @@ async def _userbot_then_bot_upload(bot_client, chat_id, path, caption, reply_to_
                                   label="userbot", timeout=15):
             return True
     except Exception:
-        logger.exception("social: userbot path errored")
+        logger.exception("social: userbot fallback errored")
 
-    # Bot-client fallback. Short timeout (10s) because this path almost
-    # always hangs on this pyrofork+ntgcalls build — we don't want to
-    # make the user wait a minute for a failure we've seen before.
-    return await _try_local_send(bot_client, chat_id, path, caption,
-                                  reply_to_id, label="bot", timeout=10)
+    return False
 
 
 async def send_media_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> bool:
@@ -189,7 +199,7 @@ async def send_media_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> 
     if not gif_url.lower().startswith(("http://", "https://")):
         # 0a — local file path. Full userbot+bot upload fallback.
         if os.path.isfile(gif_url):
-            return await _userbot_then_bot_upload(
+            return await _bot_then_userbot_upload(
                 bot_client, chat_id, gif_url, caption, reply_to_id,
             )
         # 0b — file_id (bot-only, no userbot since file_ids are scoped).
@@ -215,7 +225,7 @@ async def send_media_gif(bot_client, chat_id, gif_url, caption, reply_to_id) -> 
     if not local_path:
         return False
 
-    return await _userbot_then_bot_upload(
+    return await _bot_then_userbot_upload(
         bot_client, chat_id, local_path, caption, reply_to_id,
     )
 
