@@ -277,9 +277,16 @@ async def link_sniffer(client, message):
     url = _normalise(match.group(0))
     chat_id = message.chat.id
 
+    # Instagram is owned by bot/plugins/instagram.py (proxyless+cookieless
+    # dedicated handler that runs in group=1, before this one in group=2).
+    # If linksniffer also processes IG here we get double-download and
+    # double-reply. Bail out and let instagram.py own it.
+    if "instagram.com/" in url.lower():
+        return
+
     # YouTube links → ask for quality; the actual download happens in the
-    # callback handler below. Pinterest/Instagram fall through to the
-    # original auto-download path (single quality, no choice to make).
+    # callback handler below. Pinterest falls through to the original
+    # auto-download path (single quality, no choice to make).
     yt_id = _yt_video_id(url)
     if yt_id:
         caption = (
