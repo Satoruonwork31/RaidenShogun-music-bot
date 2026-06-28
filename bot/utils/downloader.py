@@ -25,6 +25,8 @@ from bot.utils.player import (
     _is_youtube_url,
     cookies_for_url,
     current_proxy,
+    mark_proxy_failed,
+    mark_proxy_ok,
     proxy_pool_size,
     rotate_proxy,
 )
@@ -188,10 +190,12 @@ def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple
     pool_size = max(1, proxy_pool_size())
 
     for _ in range(pool_size):
+        attempt_proxy = current_proxy()
         path, info, exc1 = _download_pass(
             url, video=video, quality=quality, use_cookies=False, use_proxy=True,
         )
         if path and info is not None:
+            mark_proxy_ok(attempt_proxy)
             return path, info
         if exc1:
             last_exc = exc1
@@ -201,12 +205,15 @@ def _try_download(url: str, *, video: bool, quality: str | None = None) -> tuple
                 url, video=video, quality=quality, use_cookies=True, use_proxy=True,
             )
             if path2 and info2 is not None:
+                mark_proxy_ok(attempt_proxy)
                 return path2, info2
             if exc2:
                 last_exc = exc2
 
-        if pool_size > 1:
+        mark_proxy_failed(attempt_proxy)
+        if proxy_pool_size() > 1:
             rotate_proxy()
+        pool_size = max(1, proxy_pool_size())
 
     if last_exc:
         raise last_exc

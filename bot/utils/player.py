@@ -165,6 +165,12 @@ def _load_proxy_pool() -> list[str]:
 _PROXY_POOL: list[str] = _load_proxy_pool()
 _active_proxy_idx: int = 0
 
+# Per-proxy consecutive-fail counter. When a proxy hits the threshold,
+# it's evicted from the pool and won't be retried until process restart.
+# Direct ("") is never evicted — it's the fallback floor.
+_PROXY_FAIL_COUNT: dict[str, int] = {}
+_PROXY_FAIL_THRESHOLD = 3
+
 
 def current_proxy() -> str:
     return _PROXY_POOL[_active_proxy_idx % len(_PROXY_POOL)]
@@ -179,6 +185,48 @@ def rotate_proxy() -> str:
 
 def proxy_pool_size() -> int:
     return len(_PROXY_POOL)
+
+
+def mark_proxy_ok(proxy: str) -> None:
+    """Reset the fail counter for `proxy` on a successful attempt."""
+    _PROXY_FAIL_COUNT.pop(proxy, None)
+
+
+def mark_proxy_failed(proxy: str) -> None:
+    """Increment the proxy's fail counter. Evict from the pool when the
+    counter reaches `_PROXY_FAIL_THRESHOLD`. Direct connection ("") is
+    never evicted. Logs the eviction so the operator can see why the
+    pool is shrinking.
+    """
+    global _active_proxy_idx
+    if not proxy:
+        return
+    _PROXY_FAIL_COUNT[proxy] = _PROXY_FAIL_COUNT.get(proxy, 0) + 1
+    if _PROXY_FAIL_COUNT[proxy] < _PROXY_FAIL_THRESHOLD:
+        return
+    if proxy not in _PROXY_POOL:
+        return
+    # Keep at least one entry; if this is the last live proxy, replace
+    # the pool with [""] so the bot falls back to direct.
+    if len(_PROXY_POOL) <= 1:
+        logger.warning(
+            "proxy pool exhausted: last proxy %s evicted, falling back to direct",
+            proxy,
+        )
+        _PROXY_POOL.clear()
+        _PROXY_POOL.append("")
+        _active_proxy_idx = 0
+        _PROXY_FAIL_COUNT.pop(proxy, None)
+        return
+    idx = _PROXY_POOL.index(proxy)
+    _PROXY_POOL.pop(idx)
+    _PROXY_FAIL_COUNT.pop(proxy, None)
+    if _active_proxy_idx >= len(_PROXY_POOL):
+        _active_proxy_idx = 0
+    logger.warning(
+        "evicted dead proxy %s after %d consecutive failures; pool size now %d",
+        proxy, _PROXY_FAIL_THRESHOLD, len(_PROXY_POOL),
+    )
 
 # Order matters — fastest / most reliable first. As of yt-dlp 2026.x:
 # - `web` is the only client that fully honours cookies AND can solve the
@@ -328,10 +376,12 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
     pool_size = max(1, proxy_pool_size())
 
     for _ in range(pool_size):
+        attempt_proxy = current_proxy()
         info, exc1, b1 = _extract_pass(
             url_or_query, extra, video=video, use_cookies=False, use_proxy=True,
         )
         if info is not None:
+            mark_proxy_ok(attempt_proxy)
             return info
         if exc1:
             last_exc = exc1
@@ -342,13 +392,18 @@ def _try_extract(url_or_query: str, extra: dict | None = None, *, video: bool = 
                 url_or_query, extra, video=video, use_cookies=True, use_proxy=True,
             )
             if info is not None:
+                mark_proxy_ok(attempt_proxy)
                 return info
             if exc2:
                 last_exc = exc2
             bot_with_cookies = max(bot_with_cookies, b2)
 
-        if pool_size > 1:
+        # Both anon and cookied passes through this proxy returned nothing
+        # usable — count it as a fail for eviction purposes.
+        mark_proxy_failed(attempt_proxy)
+        if proxy_pool_size() > 1:
             rotate_proxy()
+        pool_size = max(1, proxy_pool_size())  # may have shrunk via eviction
 
     if (bot_no_cookies or bot_with_cookies) and (not COOKIES_FILE or bot_with_cookies):
         raise YouTubeAuthRequiredError(
