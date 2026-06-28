@@ -571,8 +571,23 @@ async def ydl_callback(client, cq):
 
     except Exception as exc:
         logger.exception("ydl_callback failed vid=%s quality=%s", vid, quality)
+        emsg = str(exc).lower()
+        if "format is not available" in emsg or "no video formats" in emsg:
+            user_msg = (
+                "🚫 YouTube is refusing real video formats for this host's IP "
+                "(only thumbnail/storyboard streams returned). The fix is "
+                "fresh authenticated YouTube cookies or a different host IP — "
+                "yt-dlp can't bypass this from the bot."
+            )
+        elif "sign in" in emsg or "not a bot" in emsg:
+            user_msg = (
+                "🍪 YouTube's bot wall blocked this request. Set COOKIES_FILE "
+                "to a fresh cookies.txt exported from a logged-in browser."
+            )
+        else:
+            user_msg = f"❌ Failed: {type(exc).__name__}: {exc}"
         try:
-            await msg.edit_text(f"❌ Failed: {type(exc).__name__}: {exc}")
+            await msg.edit_text(user_msg)
         except Exception:
             pass
     finally:
