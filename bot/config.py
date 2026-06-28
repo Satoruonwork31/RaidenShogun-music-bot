@@ -27,6 +27,15 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 MEDIA_API_URL = os.getenv("MEDIA_API_URL", "").strip().rstrip("/")
 MEDIA_API_KEY = os.getenv("MEDIA_API_KEY", "").strip()
 
+# Per-platform kill switch for the media API. If the API host can't reach
+# Instagram (datacenter IP returning login_required), set this to false to
+# skip the API call for IG and go straight to the local fallback. Pinterest
+# is unaffected — only the IG path checks this flag.
+MEDIA_API_INSTAGRAM_ENABLED = (
+    os.getenv("MEDIA_API_INSTAGRAM_ENABLED", "true").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
 
 def _parse_proxy_url(raw: str) -> dict | None:
     """Parse PROXY_URL into a pyrofork-compatible proxy config.

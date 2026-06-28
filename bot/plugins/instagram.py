@@ -46,6 +46,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import InputMediaPhoto, InputMediaVideo
 
+from bot.config import MEDIA_API_INSTAGRAM_ENABLED
 from bot.utils.media_api_client import (
     ApiResult,
     fetch_via_api_detailed,
@@ -101,6 +102,15 @@ def _kind_for(path: str) -> str | None:
 _recently_seen: "OrderedDict[tuple[int, str], float]" = OrderedDict()
 _DEDUP_WINDOW_S = 8.0
 
+# After a terminal failure (API login_required / private / unavailable),
+# block the same URL for this many seconds. Prevents the "user pastes 4x
+# in a row → bot hammers the API 4x with the same dead URL" pattern.
+# The block is global per URL (not per-chat) because the cause is
+# host/IP-level, not chat-specific.
+_blocked_urls: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_BLOCK_WINDOW_S = 300.0
+_BLOCK_MAX = 1024
+
 # In-flight lock per chat — at most one IG download running per chat
 # at a time. Prevents stampedes when someone pastes 5 reels in a row.
 _chat_locks: dict[int, asyncio.Lock] = {}
@@ -120,6 +130,33 @@ def _cache_put(url: str, items: list[tuple[str, str]]) -> None:
     _file_id_cache.move_to_end(url)
     while len(_file_id_cache) > _CACHE_MAX:
         _file_id_cache.popitem(last=False)
+
+
+def _block_check(url: str) -> str | None:
+    """If `url` is within an active terminal-failure block, return the
+    cached reason key. Otherwise None.
+    """
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    while _blocked_urls:
+        oldest_url, (expiry, _r) = next(iter(_blocked_urls.items()))
+        if expiry < now:
+            _blocked_urls.popitem(last=False)
+        else:
+            break
+    entry = _blocked_urls.get(url)
+    if entry and entry[0] >= now:
+        return entry[1]
+    return None
+
+
+def _block_remember(url: str, reason: str) -> None:
+    loop = asyncio.get_running_loop()
+    expiry = loop.time() + _BLOCK_WINDOW_S
+    _blocked_urls[url] = (expiry, reason)
+    _blocked_urls.move_to_end(url)
+    while len(_blocked_urls) > _BLOCK_MAX:
+        _blocked_urls.popitem(last=False)
 
 
 def _seen_recently(chat_id: int, url: str) -> bool:
@@ -261,6 +298,10 @@ def _download_blocking(url: str, out_dir: str) -> tuple[list[str], str | None]:
 
 # Map terminal API codes / classified local reasons to a single key the
 # handler uses to pick a user-facing message and a log line.
+_GENERIC_FAILURE = "❌ Couldn't download that Instagram link."
+_USER_MESSAGES: dict[str, str] = {}  # populated immediately below.
+
+
 _REASON_API_UNCONFIGURED = "api_unconfigured"
 _REASON_API_UNREACHABLE = "api_unreachable"
 _REASON_API_AUTH = "api_auth"
@@ -273,6 +314,42 @@ _REASON_LOCAL_PRIVATE = "local_private"
 _REASON_LOCAL_UNAVAILABLE = "local_unavailable"
 _REASON_LOCAL_TIMEOUT = "local_timeout"
 _REASON_LOCAL_GENERIC = "local_generic"
+
+
+_USER_MESSAGES.update({
+    _REASON_API_UNCONFIGURED: (
+        "⚙️ Media API not configured and no local cookies. "
+        "Set MEDIA_API_URL or INSTAGRAM_COOKIES_FILE."
+    ),
+    _REASON_API_UNREACHABLE: (
+        "🌐 Media API unreachable and local fallback couldn't help. "
+        "Try again shortly."
+    ),
+    _REASON_API_AUTH: (
+        "🔑 Media API rejected the request — MEDIA_API_KEY mismatch. "
+        "The owner should check the API key on both sides."
+    ),
+    _REASON_API_LOGIN_REQUIRED: (
+        "🔒 Instagram refused anonymous access from the media API host. "
+        "This is IP/access-dependent — Pinterest may still work. The fix "
+        "is to run the media API from a host/IP Instagram serves for "
+        "public content, update yt-dlp, or use authorized cookies if "
+        "the content actually requires login."
+    ),
+    _REASON_API_PRIVATE: "🔒 That post is from a private account.",
+    _REASON_API_UNAVAILABLE: "❌ That post is gone, deleted, or geo-blocked.",
+    _REASON_API_OTHER: (
+        "❌ Media API couldn't download this — see bot logs for details."
+    ),
+    _REASON_LOCAL_COOKIES: (
+        "🍪 Local fallback hit the Instagram login wall. The owner can "
+        "set INSTAGRAM_COOKIES_FILE to a valid cookies.txt, or rely on "
+        "the media API once it's reachable."
+    ),
+    _REASON_LOCAL_PRIVATE: "🔒 That post is from a private account.",
+    _REASON_LOCAL_UNAVAILABLE: "❌ That post is gone, deleted, or geo-blocked.",
+    _REASON_LOCAL_TIMEOUT: "⌛ Instagram timed out — try again in a moment.",
+})
 
 
 def _api_terminal_reason(r: ApiResult) -> str | None:
@@ -307,7 +384,7 @@ async def _download(url: str) -> tuple[list[str], str | None]:
     """
     tmp_dir = tempfile.mkdtemp(prefix="ig_dl_")
 
-    if media_api_enabled():
+    if media_api_enabled() and MEDIA_API_INSTAGRAM_ENABLED:
         logger.info("instagram: trying media API first for %s", url)
         try:
             result = await fetch_via_api_detailed(url, Path(tmp_dir))
@@ -321,20 +398,25 @@ async def _download(url: str) -> tuple[list[str], str | None]:
 
         terminal = _api_terminal_reason(result)
         if terminal:
-            # IG/the API has given a definitive no. The local yt-dlp path
-            # would just repeat the same answer and write a misleading
-            # "no cookies" line — don't fall back.
+            # Structured log line for ops dashboards. NO secrets in here.
             logger.warning(
-                "instagram: not falling back to local yt-dlp — API returned "
-                "terminal status=%s code=%s message=%s",
-                result.status, result.code, result.message,
+                "media_api_ig_blocked=true platform=instagram status=%s "
+                "code=%s reason=%s message=%r",
+                result.status, result.code, terminal,
+                (result.message or "")[:200],
             )
+            _block_remember(url, terminal)
             return [], terminal
 
         logger.info(
             "instagram: media API transient failure (status=%s message=%s) — "
             "falling back to local yt-dlp",
             result.status, result.message,
+        )
+    elif media_api_enabled() and not MEDIA_API_INSTAGRAM_ENABLED:
+        logger.info(
+            "instagram: MEDIA_API_INSTAGRAM_ENABLED=false — skipping API, "
+            "using local yt-dlp"
         )
     else:
         logger.info("instagram: MEDIA_API_URL not set — using local yt-dlp")
@@ -397,6 +479,27 @@ async def instagram_auto_download(client, message):
     chat_id = message.chat.id if message.chat else 0
 
     if _seen_recently(chat_id, url):
+        return
+
+    # If this URL recently hit a terminal API failure, short-circuit
+    # without re-hitting the API or local yt-dlp. Repeated pastes of
+    # the same dead URL would otherwise hammer the same login_required
+    # response 4-5x in a row.
+    blocked_reason = _block_check(url)
+    if blocked_reason:
+        logger.info(
+            "instagram: url is in terminal-block cache (reason=%s) — "
+            "replying without API/local retry",
+            blocked_reason,
+        )
+        try:
+            await message.reply_text(
+                _USER_MESSAGES.get(blocked_reason, _GENERIC_FAILURE),
+                quote=True,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
         return
 
     logger.info(
@@ -468,46 +571,7 @@ async def instagram_auto_download(client, message):
         paths, reason = await _download(url)
 
         if not paths:
-            user_msg = {
-                _REASON_API_UNCONFIGURED: (
-                    "⚙️ Media API not configured and no local cookies. "
-                    "Set MEDIA_API_URL or INSTAGRAM_COOKIES_FILE."
-                ),
-                _REASON_API_UNREACHABLE: (
-                    "🌐 Media API unreachable and local fallback couldn't help. "
-                    "Try again shortly."
-                ),
-                _REASON_API_AUTH: (
-                    "🔑 Media API rejected the request — MEDIA_API_KEY mismatch. "
-                    "The owner should check the API key on both sides."
-                ),
-                _REASON_API_LOGIN_REQUIRED: (
-                    "🔒 Instagram refused anonymous access from the media API host. "
-                    "This is IP/access-dependent — Pinterest may still work. The fix "
-                    "is to run the media API from a host/IP Instagram serves for "
-                    "public content, update yt-dlp, or use authorized cookies if "
-                    "the content actually requires login."
-                ),
-                _REASON_API_PRIVATE: "🔒 That post is from a private account.",
-                _REASON_API_UNAVAILABLE: (
-                    "❌ That post is gone, deleted, or geo-blocked."
-                ),
-                _REASON_API_OTHER: (
-                    "❌ Media API couldn't download this — see bot logs for details."
-                ),
-                _REASON_LOCAL_COOKIES: (
-                    "🍪 Local fallback hit the Instagram login wall. The owner can "
-                    "set INSTAGRAM_COOKIES_FILE to a valid cookies.txt, or rely on "
-                    "the media API once it's reachable."
-                ),
-                _REASON_LOCAL_PRIVATE: "🔒 That post is from a private account.",
-                _REASON_LOCAL_UNAVAILABLE: (
-                    "❌ That post is gone, deleted, or geo-blocked."
-                ),
-                _REASON_LOCAL_TIMEOUT: (
-                    "⌛ Instagram timed out — try again in a moment."
-                ),
-            }.get(reason, "❌ Couldn't download that Instagram link.")
+            user_msg = _USER_MESSAGES.get(reason, _GENERIC_FAILURE)
             if status:
                 try:
                     await status.edit_text(user_msg)
