@@ -38,11 +38,44 @@ import logging
 import os
 import re
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import aiohttp
 
 from bot.config import MEDIA_API_KEY, MEDIA_API_URL
+
+
+@dataclass
+class ApiResult:
+    """Rich outcome of a media-API request. Lets the caller decide
+    whether to fall through to a local downloader (transient) or surface
+    a terminal classification (login_required / private / unavailable).
+    """
+    paths: list[Path] = field(default_factory=list)
+    ok: bool = False
+    status: int | None = None          # HTTP status, None on connect failure
+    code: str | None = None            # API's error.code (e.g. login_required)
+    message: str | None = None         # short human message for logs/UX
+    transient: bool = True             # True → local fallback is appropriate
+
+    @property
+    def has_files(self) -> bool:
+        return bool(self.paths)
+
+
+# Terminal API error codes: do NOT fall through to local yt-dlp because
+# IG/Pinterest gave a definitive answer the local extractor will repeat.
+_TERMINAL_CODES = {
+    "login_required",
+    "private",
+    "unavailable",
+    "not_found",
+    "media_not_found",
+    "geo_restricted",
+    "removed",
+    "deleted",
+}
 
 logger = logging.getLogger("RaidenShogun.media_api")
 
@@ -130,18 +163,51 @@ async def health_check() -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
-    """POST {url} to the media API and save the returned file(s) into
-    dest_dir. Returns the saved paths on success, an empty list on every
-    other outcome (disabled, network error, non-2xx, empty body).
+def _parse_error_body(body: dict) -> tuple[str | None, str | None]:
+    """Extract (code, message) from the API's error envelope.
 
-    Single-file (application/octet-stream) responses come back as a
-    one-item list. application/zip carousel responses are extracted
-    and ALL extracted media files are returned, sorted by filename so
-    carousel order is preserved.
+    The server's contract is:
+        { "ok": false, "error": { "code": "...", "message": "...", "detail": "..." } }
+    Older code-paths used a flat top-level {"code": "...", "message": "..."}.
+    Handle both.
+    """
+    if not isinstance(body, dict):
+        return None, None
+    err = body.get("error") if isinstance(body.get("error"), dict) else None
+    if err:
+        code = err.get("code")
+        message = err.get("message") or err.get("detail")
+    else:
+        code = body.get("code")
+        message = body.get("message") or body.get("detail")
+    if code is not None:
+        code = str(code).lower().strip()
+    return code, message
+
+
+def _classify(status: int | None, code: str | None) -> bool:
+    """Return transient=True (local fallback OK) / False (terminal)."""
+    if status is None:
+        return True            # connect failure / timeout
+    if status == 401 or status == 403 and code != "login_required":
+        return False           # auth issue / forbidden — surface, don't retry locally
+    if status == 404:
+        return False
+    if 500 <= status < 600:
+        return True
+    if code and code in _TERMINAL_CODES:
+        return False
+    return True
+
+
+async def fetch_via_api_detailed(url: str, dest_dir: Path) -> ApiResult:
+    """POST {url} to the media API and save the returned file(s) into
+    dest_dir. Returns a rich ApiResult so the caller can distinguish
+    transient failures (network / 5xx → fall through) from terminal
+    refusals (login_required / private → surface to the user).
     """
     if not is_enabled():
-        return []
+        return ApiResult(ok=False, transient=True, message="disabled (MEDIA_API_URL not set)")
 
     headers: dict[str, str] = {}
     if MEDIA_API_KEY:
@@ -157,13 +223,19 @@ async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
                 json=payload,
                 headers=headers,
             ) as resp:
-                if not (200 <= resp.status < 300):
+                status = resp.status
+                if not (200 <= status < 300):
                     err = await _read_error_body(resp)
+                    code, message = _parse_error_body(err)
+                    transient = _classify(status, code)
                     logger.warning(
-                        "media_api: %s for %s — code=%s detail=%s",
-                        resp.status, url, err.get("code"), err.get("message") or err.get("detail"),
+                        "media_api: %s for %s — code=%s message=%s transient=%s",
+                        status, url, code, message, transient,
                     )
-                    return []
+                    return ApiResult(
+                        ok=False, status=status, code=code,
+                        message=message, transient=transient,
+                    )
 
                 ctype = (resp.headers.get("Content-Type") or "").lower().split(";")[0].strip()
                 disp = resp.headers.get("Content-Disposition")
@@ -191,12 +263,14 @@ async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
                             zf.extractall(extract_dir, members=safe_members)
                     except zipfile.BadZipFile:
                         logger.warning("media_api: returned zip is corrupt for %s", url)
-                        return []
+                        return ApiResult(ok=False, status=status, transient=True,
+                                         message="corrupt zip from API")
                     items = _all_media_in(extract_dir)
                     if not items:
                         logger.warning("media_api: zip had no media files for %s", url)
-                        return []
-                    return items
+                        return ApiResult(ok=False, status=status, transient=True,
+                                         message="empty zip from API")
+                    return ApiResult(paths=items, ok=True, status=status)
 
                 # Single-file path — stream to disk under a sanitized name.
                 fallback_name = "media.mp4"
@@ -215,15 +289,26 @@ async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
                 if out.stat().st_size == 0:
                     logger.warning("media_api: returned empty body for %s", url)
                     out.unlink(missing_ok=True)
-                    return []
-                return [out]
+                    return ApiResult(ok=False, status=status, transient=True,
+                                     message="empty body from API")
+                return ApiResult(paths=[out], ok=True, status=status)
 
     except aiohttp.ClientConnectorError as exc:
         logger.warning("media_api: connection failed for %s: %s", url, exc)
-        return []
+        return ApiResult(ok=False, status=None, transient=True,
+                         message=f"connection failed: {exc}")
     except aiohttp.ServerTimeoutError:
         logger.warning("media_api: timed out for %s", url)
-        return []
+        return ApiResult(ok=False, status=None, transient=True, message="timed out")
     except Exception as exc:
         logger.warning("media_api: unexpected %s for %s: %s", type(exc).__name__, url, exc)
-        return []
+        return ApiResult(ok=False, status=None, transient=True,
+                         message=f"{type(exc).__name__}: {exc}")
+
+
+async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
+    """Back-compat wrapper around `fetch_via_api_detailed`. Returns just
+    the saved paths; callers needing failure classification (instagram.py)
+    should call the detailed variant.
+    """
+    return (await fetch_via_api_detailed(url, dest_dir)).paths

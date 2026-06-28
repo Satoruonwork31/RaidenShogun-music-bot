@@ -46,7 +46,11 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import InputMediaPhoto, InputMediaVideo
 
-from bot.utils.media_api_client import fetch_via_api, is_enabled as media_api_enabled
+from bot.utils.media_api_client import (
+    ApiResult,
+    fetch_via_api_detailed,
+    is_enabled as media_api_enabled,
+)
 from bot.utils.player import cookies_for_url
 
 logger = logging.getLogger("RaidenShogun.instagram")
@@ -255,45 +259,115 @@ def _download_blocking(url: str, out_dir: str) -> tuple[list[str], str | None]:
     return [], reason
 
 
+# Map terminal API codes / classified local reasons to a single key the
+# handler uses to pick a user-facing message and a log line.
+_REASON_API_UNCONFIGURED = "api_unconfigured"
+_REASON_API_UNREACHABLE = "api_unreachable"
+_REASON_API_AUTH = "api_auth"
+_REASON_API_LOGIN_REQUIRED = "api_login_required"
+_REASON_API_PRIVATE = "api_private"
+_REASON_API_UNAVAILABLE = "api_unavailable"
+_REASON_API_OTHER = "api_other"
+_REASON_LOCAL_COOKIES = "local_cookies"
+_REASON_LOCAL_PRIVATE = "local_private"
+_REASON_LOCAL_UNAVAILABLE = "local_unavailable"
+_REASON_LOCAL_TIMEOUT = "local_timeout"
+_REASON_LOCAL_GENERIC = "local_generic"
+
+
+def _api_terminal_reason(r: ApiResult) -> str | None:
+    """Map a non-transient ApiResult to a terminal handler reason key.
+    Returns None when the failure is transient (caller should fall back
+    to the local yt-dlp path).
+    """
+    if r.transient:
+        return None
+    if r.status in (401, 403) and r.code != "login_required":
+        return _REASON_API_AUTH
+    if r.code == "login_required":
+        return _REASON_API_LOGIN_REQUIRED
+    if r.code == "private":
+        return _REASON_API_PRIVATE
+    if r.code in (
+        "unavailable", "not_found", "media_not_found",
+        "removed", "deleted", "geo_restricted",
+    ):
+        return _REASON_API_UNAVAILABLE
+    return _REASON_API_OTHER
+
+
 async def _download(url: str) -> tuple[list[str], str | None]:
     """Async wrapper. Tries the external media API first (if configured),
-    falls back to in-process yt-dlp. Returns (paths, reason) — empty
-    paths means failure, reason classifies why for the user-facing
-    message. Caller owns the temp directory lifetime.
+    falls back to in-process yt-dlp ONLY when the API result is transient
+    (unreachable, timeout, 5xx). Returns (paths, reason).
+
+    `reason` is a short key (see _REASON_* above). The handler uses it
+    to pick both the user-facing message and the log line. None means
+    success.
     """
     tmp_dir = tempfile.mkdtemp(prefix="ig_dl_")
 
-    # External media API first — when configured. Unset = silently skip.
     if media_api_enabled():
+        logger.info("instagram: trying media API first for %s", url)
         try:
-            api_paths = await fetch_via_api(url, Path(tmp_dir))
+            result = await fetch_via_api_detailed(url, Path(tmp_dir))
         except Exception:
-            logger.exception("instagram: media_api raised — falling back to yt-dlp")
-            api_paths = []
-        if api_paths:
-            logger.info("instagram: served via media API: %d file(s)", len(api_paths))
-            return [str(p) for p in api_paths], None
+            logger.exception("instagram: media_api raised — treating as transient")
+            result = ApiResult(transient=True, message="client raised")
 
-    # In-process yt-dlp fallback (also the only path when API is disabled).
+        if result.has_files:
+            logger.info("instagram: media API delivered %d file(s)", len(result.paths))
+            return [str(p) for p in result.paths], None
+
+        terminal = _api_terminal_reason(result)
+        if terminal:
+            # IG/the API has given a definitive no. The local yt-dlp path
+            # would just repeat the same answer and write a misleading
+            # "no cookies" line — don't fall back.
+            logger.warning(
+                "instagram: not falling back to local yt-dlp — API returned "
+                "terminal status=%s code=%s message=%s",
+                result.status, result.code, result.message,
+            )
+            return [], terminal
+
+        logger.info(
+            "instagram: media API transient failure (status=%s message=%s) — "
+            "falling back to local yt-dlp",
+            result.status, result.message,
+        )
+    else:
+        logger.info("instagram: MEDIA_API_URL not set — using local yt-dlp")
+
     reason: str | None = None
     try:
-        paths, reason = await asyncio.wait_for(
+        paths, ydl_reason = await asyncio.wait_for(
             asyncio.to_thread(_download_blocking, url, tmp_dir),
             timeout=60,
         )
     except asyncio.TimeoutError:
         logger.info("instagram: download timed out after 60s for %s", url)
         paths = []
-        reason = "timeout"
-    if not paths:
-        try:
-            for n in os.listdir(tmp_dir):
-                os.remove(os.path.join(tmp_dir, n))
-            os.rmdir(tmp_dir)
-        except OSError:
-            pass
-        return [], reason
-    return paths, reason
+        ydl_reason = "timeout"
+
+    if paths:
+        return paths, None
+
+    # Map the local _classify_ydl_error output to handler reason keys.
+    reason = {
+        "cookies": _REASON_LOCAL_COOKIES,
+        "private": _REASON_LOCAL_PRIVATE,
+        "unavailable": _REASON_LOCAL_UNAVAILABLE,
+        "timeout": _REASON_LOCAL_TIMEOUT,
+    }.get(ydl_reason, _REASON_LOCAL_GENERIC)
+
+    try:
+        for n in os.listdir(tmp_dir):
+            os.remove(os.path.join(tmp_dir, n))
+        os.rmdir(tmp_dir)
+    except OSError:
+        pass
+    return [], reason
 
 
 async def _delete_silently(message) -> None:
@@ -395,14 +469,44 @@ async def instagram_auto_download(client, message):
 
         if not paths:
             user_msg = {
-                "cookies": (
-                    "🍪 Instagram needs a login to serve this from the bot's "
-                    "IP. The owner must set INSTAGRAM_COOKIES_FILE to a "
-                    "valid cookies.txt exported from a logged-in browser."
+                _REASON_API_UNCONFIGURED: (
+                    "⚙️ Media API not configured and no local cookies. "
+                    "Set MEDIA_API_URL or INSTAGRAM_COOKIES_FILE."
                 ),
-                "private": "🔒 That post is from a private account.",
-                "unavailable": "❌ That post is gone or geo-blocked.",
-                "timeout": "⌛ Instagram timed out — try again in a moment.",
+                _REASON_API_UNREACHABLE: (
+                    "🌐 Media API unreachable and local fallback couldn't help. "
+                    "Try again shortly."
+                ),
+                _REASON_API_AUTH: (
+                    "🔑 Media API rejected the request — MEDIA_API_KEY mismatch. "
+                    "The owner should check the API key on both sides."
+                ),
+                _REASON_API_LOGIN_REQUIRED: (
+                    "🔒 Instagram refused anonymous access from the media API host. "
+                    "This is IP/access-dependent — Pinterest may still work. The fix "
+                    "is to run the media API from a host/IP Instagram serves for "
+                    "public content, update yt-dlp, or use authorized cookies if "
+                    "the content actually requires login."
+                ),
+                _REASON_API_PRIVATE: "🔒 That post is from a private account.",
+                _REASON_API_UNAVAILABLE: (
+                    "❌ That post is gone, deleted, or geo-blocked."
+                ),
+                _REASON_API_OTHER: (
+                    "❌ Media API couldn't download this — see bot logs for details."
+                ),
+                _REASON_LOCAL_COOKIES: (
+                    "🍪 Local fallback hit the Instagram login wall. The owner can "
+                    "set INSTAGRAM_COOKIES_FILE to a valid cookies.txt, or rely on "
+                    "the media API once it's reachable."
+                ),
+                _REASON_LOCAL_PRIVATE: "🔒 That post is from a private account.",
+                _REASON_LOCAL_UNAVAILABLE: (
+                    "❌ That post is gone, deleted, or geo-blocked."
+                ),
+                _REASON_LOCAL_TIMEOUT: (
+                    "⌛ Instagram timed out — try again in a moment."
+                ),
             }.get(reason, "❌ Couldn't download that Instagram link.")
             if status:
                 try:
