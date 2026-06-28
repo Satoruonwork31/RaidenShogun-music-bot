@@ -88,9 +88,10 @@ def _filename_from_disposition(header: str | None, default: str) -> str:
     return default
 
 
-def _first_media_in(dir_path: Path) -> Path | None:
-    """Lowest-numbered / alphabetically-first media file in dir_path,
-    recursive. Telegram sends one — pick a deterministic one.
+def _all_media_in(dir_path: Path) -> list[Path]:
+    """All media files in dir_path, recursive, sorted by full path so
+    carousel order is preserved (yt-dlp / the API name them 01_, 02_,
+    ... so a plain sort puts them in upload order).
     """
     exts = (".mp4", ".mov", ".webm", ".mkv", ".jpg", ".jpeg", ".png", ".webp", ".gif")
     candidates: list[Path] = []
@@ -98,10 +99,8 @@ def _first_media_in(dir_path: Path) -> Path | None:
         for f in files:
             if f.lower().endswith(exts):
                 candidates.append(Path(root) / f)
-    if not candidates:
-        return None
     candidates.sort()
-    return candidates[0]
+    return candidates
 
 
 async def _read_error_body(resp: aiohttp.ClientResponse) -> dict:
@@ -130,17 +129,18 @@ async def health_check() -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-async def fetch_via_api(url: str, dest_dir: Path) -> Path | None:
-    """POST {url} to the media API and save the returned file into
-    dest_dir. Returns the saved Path on success, None on every other
-    outcome (disabled, network error, non-2xx, empty body).
+async def fetch_via_api(url: str, dest_dir: Path) -> list[Path]:
+    """POST {url} to the media API and save the returned file(s) into
+    dest_dir. Returns the saved paths on success, an empty list on every
+    other outcome (disabled, network error, non-2xx, empty body).
 
-    For application/zip responses, the zip is extracted into dest_dir
-    and the first media file is returned; the rest stays on disk for
-    the caller.
+    Single-file (application/octet-stream) responses come back as a
+    one-item list. application/zip carousel responses are extracted
+    and ALL extracted media files are returned, sorted by filename so
+    carousel order is preserved.
     """
     if not is_enabled():
-        return None
+        return []
 
     headers: dict[str, str] = {}
     if MEDIA_API_KEY:
@@ -162,7 +162,7 @@ async def fetch_via_api(url: str, dest_dir: Path) -> Path | None:
                         "media_api: %s for %s — code=%s detail=%s",
                         resp.status, url, err.get("code"), err.get("message") or err.get("detail"),
                     )
-                    return None
+                    return []
 
                 ctype = (resp.headers.get("Content-Type") or "").lower().split(";")[0].strip()
                 disp = resp.headers.get("Content-Disposition")
@@ -190,12 +190,12 @@ async def fetch_via_api(url: str, dest_dir: Path) -> Path | None:
                             zf.extractall(extract_dir, members=safe_members)
                     except zipfile.BadZipFile:
                         logger.warning("media_api: returned zip is corrupt for %s", url)
-                        return None
-                    first = _first_media_in(extract_dir)
-                    if not first:
+                        return []
+                    items = _all_media_in(extract_dir)
+                    if not items:
                         logger.warning("media_api: zip had no media files for %s", url)
-                        return None
-                    return first
+                        return []
+                    return items
 
                 # Single-file path — stream to disk under a sanitized name.
                 fallback_name = "media.mp4"
@@ -214,15 +214,15 @@ async def fetch_via_api(url: str, dest_dir: Path) -> Path | None:
                 if out.stat().st_size == 0:
                     logger.warning("media_api: returned empty body for %s", url)
                     out.unlink(missing_ok=True)
-                    return None
-                return out
+                    return []
+                return [out]
 
     except aiohttp.ClientConnectorError as exc:
         logger.warning("media_api: connection failed for %s: %s", url, exc)
-        return None
+        return []
     except aiohttp.ServerTimeoutError:
         logger.warning("media_api: timed out for %s", url)
-        return None
+        return []
     except Exception as exc:
         logger.warning("media_api: unexpected %s for %s: %s", type(exc).__name__, url, exc)
-        return None
+        return []

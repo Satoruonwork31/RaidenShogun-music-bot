@@ -44,6 +44,7 @@ from yt_dlp import YoutubeDL
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
+from pyrogram.types import InputMediaPhoto, InputMediaVideo
 
 from bot.utils.media_api_client import fetch_via_api, is_enabled as media_api_enabled
 from bot.utils.player import cookies_for_url
@@ -70,8 +71,26 @@ _IG_MOBILE_UA = (
 # Per-URL file_id cache. Keeps the last N entries in insertion order
 # and evicts the oldest when full. Lives in the bot process — wiped
 # on restart, which is fine: re-downloading a stale URL costs ~3s.
+# Value is a list of (file_id, kind) pairs preserving carousel order;
+# kind is "video" or "photo" so the cached replay rebuilds the same
+# send_video / send_photo / send_media_group shape it was stored as.
 _CACHE_MAX = 512
-_file_id_cache: "OrderedDict[str, str]" = OrderedDict()
+_file_id_cache: "OrderedDict[str, list[tuple[str, str]]]" = OrderedDict()
+
+# Extension → Telegram media kind. The spec for instagram.py is exactly
+# this set; other extensions are ignored when collecting download output.
+_VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv")
+_PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _kind_for(path: str) -> str | None:
+    """Return 'video', 'photo', or None for unsupported extensions."""
+    low = path.lower()
+    if low.endswith(_VIDEO_EXTS):
+        return "video"
+    if low.endswith(_PHOTO_EXTS):
+        return "photo"
+    return None
 
 # Per-chat dedup window so two pastes of the same link in quick
 # succession don't queue two downloads.
@@ -83,15 +102,17 @@ _DEDUP_WINDOW_S = 8.0
 _chat_locks: dict[int, asyncio.Lock] = {}
 
 
-def _cache_get(url: str) -> str | None:
-    fid = _file_id_cache.get(url)
-    if fid:
+def _cache_get(url: str) -> list[tuple[str, str]] | None:
+    items = _file_id_cache.get(url)
+    if items:
         _file_id_cache.move_to_end(url)
-    return fid
+    return items
 
 
-def _cache_put(url: str, file_id: str) -> None:
-    _file_id_cache[url] = file_id
+def _cache_put(url: str, items: list[tuple[str, str]]) -> None:
+    if not items:
+        return
+    _file_id_cache[url] = items
     _file_id_cache.move_to_end(url)
     while len(_file_id_cache) > _CACHE_MAX:
         _file_id_cache.popitem(last=False)
@@ -128,9 +149,11 @@ def _mention_html(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
-def _download_blocking(url: str, out_dir: str) -> str | None:
-    """Run yt-dlp synchronously; return the first downloaded media path
-    or None. Proxyless, cookies-via-tempfile, age_limit=100, IG mobile UA.
+def _download_blocking(url: str, out_dir: str) -> list[str]:
+    """Run yt-dlp synchronously; return ALL downloaded media paths in
+    out_dir (sorted by filename so carousel order is preserved). Empty
+    list = failure. Proxyless, cookies-via-tempfile, age_limit=100, IG
+    mobile UA.
     """
     opts = {
         "quiet": True,
@@ -157,50 +180,54 @@ def _download_blocking(url: str, out_dir: str) -> str | None:
             ydl.download([url])
     except Exception as exc:
         logger.info("instagram: yt-dlp raised %s: %s", type(exc).__name__, str(exc)[:200])
-        return None
-    # Find the first media file in out_dir.
+        return []
+    # Collect ALL media files (videos + images), sorted by name for
+    # carousel order. A carousel whose first item is a photo previously
+    # tripped the video-only filter and reported total failure.
+    found: list[str] = []
     for name in sorted(os.listdir(out_dir)):
-        if name.lower().endswith((".mp4", ".mov", ".webm", ".mkv")):
-            return os.path.join(out_dir, name)
-    return None
+        low = name.lower()
+        if low.endswith(_VIDEO_EXTS) or low.endswith(_PHOTO_EXTS):
+            found.append(os.path.join(out_dir, name))
+    return found
 
 
-async def _download(url: str) -> str | None:
+async def _download(url: str) -> list[str]:
     """Async wrapper. Tries the external media API first (if configured),
-    falls back to in-process yt-dlp. Returns the path or None. Caller
-    owns the temp directory lifetime.
+    falls back to in-process yt-dlp. Returns the list of media paths
+    (empty list = failure). Caller owns the temp directory lifetime.
     """
     tmp_dir = tempfile.mkdtemp(prefix="ig_dl_")
 
     # External media API first — when configured. Unset = silently skip.
     if media_api_enabled():
         try:
-            api_path = await fetch_via_api(url, Path(tmp_dir))
+            api_paths = await fetch_via_api(url, Path(tmp_dir))
         except Exception:
             logger.exception("instagram: media_api raised — falling back to yt-dlp")
-            api_path = None
-        if api_path:
-            logger.info("instagram: served via media API: %s", api_path)
-            return str(api_path)
+            api_paths = []
+        if api_paths:
+            logger.info("instagram: served via media API: %d file(s)", len(api_paths))
+            return [str(p) for p in api_paths]
 
     # In-process yt-dlp fallback (also the only path when API is disabled).
     try:
-        path = await asyncio.wait_for(
+        paths = await asyncio.wait_for(
             asyncio.to_thread(_download_blocking, url, tmp_dir),
             timeout=60,
         )
     except asyncio.TimeoutError:
         logger.info("instagram: download timed out after 60s for %s", url)
-        path = None
-    if not path:
+        paths = []
+    if not paths:
         try:
             for n in os.listdir(tmp_dir):
                 os.remove(os.path.join(tmp_dir, n))
             os.rmdir(tmp_dir)
         except OSError:
             pass
-        return None
-    return path
+        return []
+    return paths
 
 
 async def _delete_silently(message) -> None:
@@ -240,19 +267,45 @@ async def instagram_auto_download(client, message):
     mention = _mention_html(message.from_user)
     delivered_caption = f"✅ Delivered — {mention}"
 
-    # Cache hit: re-deliver the same file_id, instant, no re-download.
+    # Cache hit: re-deliver the same file_ids in the same shape they
+    # were stored as (single send_video / send_photo, or media group).
     cached = _cache_get(url)
     if cached:
         try:
-            await client.send_video(
-                chat_id=chat_id,
-                video=cached,
-                caption=delivered_caption,
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=message.id,
-                supports_streaming=True,
-            )
-            logger.info("instagram: cache hit, file_id served for %s", url)
+            if len(cached) == 1:
+                fid, kind = cached[0]
+                if kind == "photo":
+                    await client.send_photo(
+                        chat_id=chat_id,
+                        photo=fid,
+                        caption=delivered_caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=message.id,
+                    )
+                else:
+                    await client.send_video(
+                        chat_id=chat_id,
+                        video=fid,
+                        caption=delivered_caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=message.id,
+                        supports_streaming=True,
+                    )
+            else:
+                media = []
+                for i, (fid, kind) in enumerate(cached):
+                    cap = delivered_caption if i == 0 else None
+                    pm = ParseMode.HTML if i == 0 else None
+                    if kind == "photo":
+                        media.append(InputMediaPhoto(media=fid, caption=cap, parse_mode=pm))
+                    else:
+                        media.append(InputMediaVideo(media=fid, caption=cap, parse_mode=pm))
+                await client.send_media_group(
+                    chat_id=chat_id,
+                    media=media,
+                    reply_to_message_id=message.id,
+                )
+            logger.info("instagram: cache hit, %d file_id(s) served for %s", len(cached), url)
             return
         except Exception as exc:
             # Stale file_id (asset deleted on Telegram side) — fall through
@@ -272,9 +325,9 @@ async def instagram_auto_download(client, message):
         except Exception:
             logger.info("instagram: status reply failed, continuing without it")
 
-        path = await _download(url)
+        paths = await _download(url)
 
-        if not path:
+        if not paths:
             if status:
                 try:
                     await status.edit_text(
@@ -287,21 +340,76 @@ async def instagram_auto_download(client, message):
             return
 
         try:
-            sent = await client.send_video(
-                chat_id=chat_id,
-                video=path,
-                caption=delivered_caption,
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=message.id,
-                supports_streaming=True,
-            )
-            if sent and getattr(sent, "video", None):
-                _cache_put(url, sent.video.file_id)
-                logger.info("instagram: delivered + cached file_id for %s", url)
+            # Drop any files with unsupported extensions; spec restricts
+            # to the 8 video+image types. _download_blocking already
+            # filters, but the media-API path may include other ones.
+            typed_paths: list[tuple[str, str]] = []
+            for p in paths:
+                k = _kind_for(p)
+                if k:
+                    typed_paths.append((p, k))
+            if not typed_paths:
+                # Treat "downloaded nothing supported" the same as a
+                # download failure — same error UX, no new states.
+                raise RuntimeError("no supported media in download")
+
+            cache_entries: list[tuple[str, str]] = []
+
+            if len(typed_paths) == 1:
+                p, kind = typed_paths[0]
+                if kind == "photo":
+                    sent = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=p,
+                        caption=delivered_caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=message.id,
+                    )
+                    if sent and getattr(sent, "photo", None):
+                        cache_entries.append((sent.photo.file_id, "photo"))
+                else:
+                    sent = await client.send_video(
+                        chat_id=chat_id,
+                        video=p,
+                        caption=delivered_caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=message.id,
+                        supports_streaming=True,
+                    )
+                    if sent and getattr(sent, "video", None):
+                        cache_entries.append((sent.video.file_id, "video"))
             else:
-                logger.info("instagram: delivered (no file_id captured)")
+                media = []
+                for i, (p, kind) in enumerate(typed_paths):
+                    cap = delivered_caption if i == 0 else None
+                    pm = ParseMode.HTML if i == 0 else None
+                    if kind == "photo":
+                        media.append(InputMediaPhoto(media=p, caption=cap, parse_mode=pm))
+                    else:
+                        media.append(InputMediaVideo(
+                            media=p, caption=cap, parse_mode=pm,
+                            supports_streaming=True,
+                        ))
+                sent_list = await client.send_media_group(
+                    chat_id=chat_id,
+                    media=media,
+                    reply_to_message_id=message.id,
+                )
+                for i, m in enumerate(sent_list or []):
+                    expected_kind = typed_paths[i][1] if i < len(typed_paths) else None
+                    if expected_kind == "photo" and getattr(m, "photo", None):
+                        cache_entries.append((m.photo.file_id, "photo"))
+                    elif expected_kind == "video" and getattr(m, "video", None):
+                        cache_entries.append((m.video.file_id, "video"))
+
+            if cache_entries and len(cache_entries) == len(typed_paths):
+                _cache_put(url, cache_entries)
+                logger.info("instagram: delivered + cached %d file_id(s) for %s", len(cache_entries), url)
+            else:
+                logger.info("instagram: delivered (cache skipped: got %d file_id(s) for %d item(s))",
+                            len(cache_entries), len(typed_paths))
         except Exception as exc:
-            logger.warning("instagram: send_video failed: %s", type(exc).__name__)
+            logger.warning("instagram: send failed: %s", type(exc).__name__)
             if status:
                 try:
                     await status.edit_text("❌ Couldn't send that Instagram video.")
@@ -311,14 +419,24 @@ async def instagram_auto_download(client, message):
                 await _delete_silently(status)
             return
         finally:
-            # Always clean the tempdir.
-            try:
-                d = os.path.dirname(path)
-                for n in os.listdir(d):
-                    os.remove(os.path.join(d, n))
-                os.rmdir(d)
-            except OSError:
-                pass
+            # Always clean the tempdir — same listdir+remove guarantee as
+            # before, just iterated over every file in the download.
+            for p in paths:
+                try:
+                    d = os.path.dirname(p)
+                    if not d or not os.path.isdir(d):
+                        continue
+                    for n in os.listdir(d):
+                        try:
+                            os.remove(os.path.join(d, n))
+                        except OSError:
+                            pass
+                    try:
+                        os.rmdir(d)
+                    except OSError:
+                        pass
+                except OSError:
+                    pass
 
         # Success: drop the status message.
         if status:
