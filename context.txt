@@ -1,6 +1,6 @@
 # RaidenShogun Music Bot — Context
 
-Last updated: 2026-06-27 (session: stop tracking .env, delete dead code, named startup stages, .env.example added)
+Last updated: 2026-06-28 (session: fix linksniffer list-vs-Path crash on Pinterest+media_api; audit pass over post-instagram-carousel commits)
 
 ## Project Overview
 
@@ -107,6 +107,59 @@ See AUDIT_REPORT.md for the prioritized list and severity. High-level:
 - MEDIUM: bot/utils/queue.py is dead code.
 
 ## Fix History
+
+### 2026-06-28 — linksniffer crash on Pinterest + media_api enabled
+
+User-reported symptom: none specified this session. New audit pass
+focused on the commits that landed AFTER the 2026-06-27 session 2
+audit closed: the IG carousel + media_api microservice cluster
+(d39d67c, 482654b, b0086f1, 77bc6c9, fb6df11, 58a0775, d593694,
+6586e05, 72a749a).
+
+Found and fixed (NEW-1 in AUDIT_REPORT.md, HIGH severity):
+
+`bot/plugins/linksniffer.py` called the post-d39d67c `fetch_via_api`
+under the assumption it still returned a single `Path`. It now
+returns `list[Path]` (carousel-aware). With MEDIA_API_URL set, a
+Pinterest paste hit this branch and crashed at `api_path.stem` with
+`AttributeError: 'list' object has no attribute 'stem'`. The handler
+died in the broad except and the user saw `❌ Auto-download failed:
+AttributeError: ...` for every Pinterest link.
+
+Files changed:
+- bot/plugins/linksniffer.py — rename local `api_path` → `api_paths`,
+  take `api_paths[0]` for the single-file upload path. Linksniffer
+  uses `_try_uploads` which is single-file; Pinterest pins are
+  single-item in practice (IG carousels are owned by
+  bot/plugins/instagram.py and short-circuited at the top of
+  `link_sniffer`).
+- bot/utils/media_api_client.py — module docstring (the source of the
+  divergence; called out single-Path return when the function returns
+  list[Path]).
+
+Newly tracked but NOT fixed this pass (LOW-7 in AUDIT_REPORT.md):
+- bot/plugins/instagram.py leaks the parent `tmp_dir` when the media
+  API returns a zip carousel (cleanup walks only `_extracted/`).
+  Bounded by /tmp reaping, not user-visible — deliberately deferred to
+  keep the diff minimal.
+
+Verification performed:
+- python3 -m py_compile on both changed files → PASS.
+- AST parse over the whole `bot/` tree → PASS.
+- Synthetic repro of the crash: ran the OLD code path against
+  `[PosixPath('/tmp/foo/01.jpg')]`; reproduced the expected
+  `AttributeError`. Then ran the NEW code path; got the correct first
+  `Path`. (Evidence captured in the session.)
+
+Verification NOT performed:
+- Live Telegram smoke (no creds in sandbox).
+- Live media_api round-trip (no service to reach).
+- Behavioural test against an actual Pinterest URL (no MEDIA_API
+  available in sandbox).
+
+Audit items closed: NEW-1.
+Audit items still open: CRIT-1 (still blocked on user), HIGH-3
+(partial), MED-4, LOW-2/3/4/6, LOW-7 (new).
 
 ### 2026-06-27 — `.env` un-tracked, dead code deleted, named startup stages
 
@@ -472,6 +525,16 @@ Verification performed:
 
 ## Session Log
 
+- 2026-06-28: Fifth pass. No specific user symptom; targeted at the
+  post-2026-06-27 commits (IG carousel + media_api). Found a real
+  HIGH-severity crash in linksniffer's Pinterest+media_api branch
+  (called the now-list-returning fetch_via_api as if it still
+  returned a single Path; misled by the stale module docstring).
+  Fixed both the call site and the docstring. Synthetic repro
+  confirmed the AttributeError and the fix. Live Telegram verification
+  still blocked on credentials. New LOW-7 logged: instagram.py tmpdir
+  leak on zip-carousel responses, deferred. CRIT-1 still blocks live
+  testing.
 - 2026-06-27: Third pass, no specific user symptom. Closed HIGH-2
   (pin reqs), MED-2 (delete dead file), MED-5 (promote imports),
   LOW-5 (atomic write). Marked ptb_main.py DEPRECATED. CRIT-1 still

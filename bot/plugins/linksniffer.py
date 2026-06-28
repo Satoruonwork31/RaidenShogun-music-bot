@@ -346,10 +346,14 @@ async def link_sniffer(client, message):
             import tempfile as _tempfile
             api_tmp_dir = _tempfile.mkdtemp(prefix="linksniffer_api_")
             try:
-                api_path = await fetch_via_api(url, Path(api_tmp_dir))
+                api_paths = await fetch_via_api(url, Path(api_tmp_dir))
             except Exception:
                 logger.exception("link_sniffer: media_api raised — falling back")
-                api_path = None
+                api_paths = []
+            # fetch_via_api returns list[Path]; linksniffer's _try_uploads is
+            # single-file. Pinterest pins are single-item in practice (IG
+            # carousels are routed through bot/plugins/instagram.py).
+            api_path = api_paths[0] if api_paths else None
             if api_path:
                 api_path_str = str(api_path)
                 size = os.path.getsize(api_path_str) if os.path.exists(api_path_str) else 0
@@ -362,8 +366,8 @@ async def link_sniffer(client, message):
                 title = api_path.stem or "video"
                 await status.edit_text(f"📤 Uploading: {title}")
                 logger.info(
-                    "link_sniffer: media_api delivered %s for %s (%d bytes) — uploading",
-                    api_path_str, url, size,
+                    "link_sniffer: media_api delivered %s for %s (%d bytes, %d-item) — uploading",
+                    api_path_str, url, size, len(api_paths),
                 )
                 # Don't pass yt-dlp-style metadata; Telegram autogenerates.
                 sent_ok = await _try_uploads(

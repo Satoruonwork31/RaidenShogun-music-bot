@@ -1,7 +1,83 @@
 # RaidenShogun Music Bot — Audit Report
 
 Date: 2026-06-24 (initial), 2026-06-25 (delta), 2026-06-27 (delta below),
-2026-06-27 [session 2 delta]
+2026-06-27 [session 2 delta], 2026-06-28 (delta below)
+
+## 2026-06-28 — Delta (post-instagram-carousel commits audit)
+
+First pass against the commits that landed AFTER the 2026-06-27 session 2
+audit closed — specifically the IG/media_api/social-commands cluster
+(`d39d67c`, `482654b`, `b0086f1`, `77bc6c9`, `fb6df11`, `58a0775`,
+`d593694`, `6586e05`, plus the social-helpers extraction `72a749a`).
+
+### NEW-1 (HIGH) — `bot/plugins/linksniffer.py` media_api branch passes a
+`list` where a `Path` is expected. Crash on Pinterest paste when
+`MEDIA_API_URL` is set.
+
+Root cause: commit `d39d67c` changed `bot/utils/media_api_client.py`
+`fetch_via_api()` from returning a single `Path` to returning
+`list[Path]` (to support IG carousels via zip extraction). `instagram.py`
+was updated for the new contract; `linksniffer.py:349-372` was not.
+
+Symptom under MEDIA_API enabled + Pinterest paste:
+- `api_path = await fetch_via_api(...)` captures the list.
+- `if api_path:` is truthy for a non-empty list.
+- `str(api_path)` → `"[PosixPath('/tmp/.../01.jpg')]"`.
+- `os.path.exists(api_path_str)` → False → size=0 (silent wrong path).
+- `api_path.stem` → `AttributeError: 'list' object has no attribute 'stem'`.
+- The handler dies in the broad except at line 453; user sees
+  `"❌ Auto-download failed: AttributeError: ..."` for every Pinterest link.
+
+Also misleading: the module docstring at `bot/utils/media_api_client.py:8-12`
+still described the single-`Path` return. That's how the call site
+diverged from the contract in the first place.
+
+Fixed in this pass:
+- `bot/plugins/linksniffer.py` — rename local to `api_paths`, take
+  `api_paths[0]` as the working file. Linksniffer's `_try_uploads` is
+  single-file-shaped; Pinterest pins are single-item in practice (IG
+  carousels are owned by `bot/plugins/instagram.py` and short-circuited
+  at the top of `link_sniffer`).
+- `bot/utils/media_api_client.py` — module docstring updated to
+  describe the `list[Path]` return; the per-function docstring at line
+  132 was already correct.
+
+Verification:
+- `python3 -m py_compile` on both files → PASS.
+- Synthetic repro: ran the OLD code path inline against
+  `[PosixPath('/tmp/foo/01.jpg')]`; got the expected
+  `AttributeError: 'list' object has no attribute 'stem'`. NEW code
+  path returned the correct first `Path`.
+
+NOT verified:
+- Live Telegram + live media_api smoke (no creds in sandbox, no live
+  media_api service to reach).
+
+### NEW-2 (LOW) — `bot/plugins/instagram.py` tempdir leak on media_api
+zip-carousel responses
+
+In `_download()` (line 200), `tmp_dir = tempfile.mkdtemp(...)`. For
+single-file responses, returned paths live directly in `tmp_dir` and
+the cleanup loop in the handler (line 421-439, walking
+`os.path.dirname(p)`) wipes `tmp_dir`. For carousel zip responses the
+returned paths live in `tmp_dir/_extracted/`, so the cleanup only
+deletes `_extracted` and leaves `tmp_dir/carousel.zip` plus the now-
+empty `tmp_dir` on disk.
+
+Impact: bounded by `/tmp` reaping (reboot) but accumulates between
+reboots. Not fixed this pass — keeping the diff minimal. Tracked as
+LOW-7 in this audit.
+
+Still open from prior sessions:
+- **CRIT-1** — credential leak, requires user action (rotate
+  BOT_TOKEN, terminate STRING_SESSION, optionally purge .env history).
+- **HIGH-3 partial** — `ensure_userbot_in_chat` private-chat path needs
+  the bot to be an admin with invite rights; non-admin private chats
+  still surface a clear error to the user.
+- **MED-4** — /help re-audit.
+- **LOW-2, LOW-3, LOW-4, LOW-6** — unchanged.
+- **LOW-7 (new this pass)** — instagram.py tmpdir leak on zip-carousel
+  media_api responses.
 
 ## 2026-06-27 [session 2] — Delta
 

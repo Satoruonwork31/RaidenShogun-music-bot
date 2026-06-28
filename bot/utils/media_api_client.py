@@ -6,9 +6,10 @@ Pinterest URLs and returns the raw media bytes — keeping all the
 cookie + proxy nonsense isolated from this bot.
 
 This module exposes one async entry point — `fetch_via_api(url, dest_dir)`
-— which returns a Path to a downloaded media file or None. None means
-"disabled, unreachable, or the API said no" — the caller must fall
-through to the existing in-process yt-dlp path on None.
+— which returns a list of Paths to downloaded media files. An empty list
+means "disabled, unreachable, or the API said no" — the caller must fall
+through to the existing in-process yt-dlp path on an empty list. The list
+has length 1 for single-file responses and length N for zip carousels.
 
 Contract (from operator):
 - POST {MEDIA_API_URL}/download
@@ -19,17 +20,17 @@ Contract (from operator):
 - GET  {MEDIA_API_URL}/health — no auth.
 
 Design notes:
-- Returns None on EVERY non-success path (disabled, network error,
+- Returns [] on EVERY non-success path (disabled, network error,
   non-2xx, malformed body). Never raises. Caller wants a binary
-  signal: "got file?" / "didn't, fall back to yt-dlp".
+  signal: "got files?" / "didn't, fall back to yt-dlp".
 - The aiohttp dependency is already in requirements.txt for the
   cookie-clobber tempfile flow.
 - The 90s timeout is wall-clock for the API call only; the API's own
   internal yt-dlp download time is inside that budget.
-- Unzipping carousels: we save the .zip, extract into dest_dir, and
-  return the first media file. Telegram doesn't reasonably consume a
-  multi-file carousel as one message; the rest of the carousel is
-  left in dest_dir for the caller to pick up if it wants.
+- Unzipping carousels: we save the .zip, extract into dest_dir/_extracted,
+  and return ALL extracted media files sorted by filename so carousel
+  order is preserved. Callers that can only send a single file should
+  take paths[0].
 """
 
 import json
