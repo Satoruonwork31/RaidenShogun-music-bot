@@ -108,7 +108,7 @@ _DEDUP_WINDOW_S = 8.0
 # The block is global per URL (not per-chat) because the cause is
 # host/IP-level, not chat-specific.
 _blocked_urls: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
-_BLOCK_WINDOW_S = 300.0
+_BLOCK_WINDOW_S = 1800.0
 _BLOCK_MAX = 1024
 
 # In-flight lock per chat — at most one IG download running per chat
