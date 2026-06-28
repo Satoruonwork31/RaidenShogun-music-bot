@@ -87,20 +87,25 @@ async def _run():
     # Cookie diagnostics — a typo'd COOKIES_FILE path silently behaves
     # the same as unset, so surface the real state at boot.
     import os as _os
-    cookies_path = _os.getenv("COOKIES_FILE", "").strip()
-    if not cookies_path:
-        logger.warning(
-            "COOKIES_FILE is unset — YouTube downloads will fail on the "
-            "bot-check wall. Set COOKIES_FILE=/abs/path/cookies.txt in .env."
-        )
-    elif _os.path.exists(cookies_path):
-        logger.info("COOKIES_FILE is set and exists: %s", cookies_path)
-    else:
-        logger.warning(
-            "COOKIES_FILE is set to %r but that path does NOT exist on disk "
-            "— treated the same as unset. Check for a typo.",
-            cookies_path,
-        )
+    for env_name, host_label in (
+        ("COOKIES_FILE", "YouTube"),
+        ("INSTAGRAM_COOKIES_FILE", "Instagram"),
+    ):
+        path = _os.getenv(env_name, "").strip()
+        if not path:
+            logger.warning(
+                "%s is unset — %s downloads will fail on the "
+                "bot-check / login wall. Set %s=/abs/path/cookies.txt in .env.",
+                env_name, host_label, env_name,
+            )
+        elif _os.path.exists(path):
+            logger.info("%s is set and exists: %s", env_name, path)
+        else:
+            logger.warning(
+                "%s is set to %r but that path does NOT exist on disk "
+                "— treated the same as unset. Check for a typo.",
+                env_name, path,
+            )
 
     # Media API diagnostics — only ping if MEDIA_API_URL is set, so a bot
     # without the external service runs unchanged. A misconfigured URL or

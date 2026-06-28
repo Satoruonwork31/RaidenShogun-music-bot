@@ -149,12 +149,57 @@ def _mention_html(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
-def _download_blocking(url: str, out_dir: str) -> list[str]:
-    """Run yt-dlp synchronously; return ALL downloaded media paths in
-    out_dir (sorted by filename so carousel order is preserved). Empty
-    list = failure. Proxyless, cookies-via-tempfile, age_limit=100, IG
-    mobile UA.
+class _YDLLogger:
+    """Bridge yt-dlp's logger contract onto our bot logger so we can
+    quiet yt-dlp's stderr noise (quiet=True) but still capture its real
+    error lines. Without this, `quiet=True + ignoreerrors=True` swallows
+    failures entirely and the operator sees "Couldn't download" with no
+    way to tell apart cookies-missing / login-wall / extractor-broken /
+    network failure.
     """
+    def debug(self, msg):
+        if not msg.startswith("[debug]"):
+            self.info(msg)
+    def info(self, msg):
+        logger.info("instagram[yt-dlp]: %s", msg.rstrip())
+    def warning(self, msg):
+        logger.warning("instagram[yt-dlp]: %s", msg.rstrip())
+    def error(self, msg):
+        logger.warning("instagram[yt-dlp] ERROR: %s", msg.rstrip())
+
+
+def _classify_ydl_error(text: str) -> str | None:
+    """Map a yt-dlp error string to a short reason code used by the
+    handler to pick a user-facing message. Returns None when we don't
+    have a more specific story than "generic download failure".
+    """
+    low = text.lower()
+    if "empty media response" in low or "login_required" in low or "rate-limit" in low:
+        return "cookies"
+    if "video unavailable" in low or "this content isn" in low or "404" in low:
+        return "unavailable"
+    if "private" in low and "account" in low:
+        return "private"
+    return None
+
+
+def _download_blocking(url: str, out_dir: str) -> tuple[list[str], str | None]:
+    """Run yt-dlp synchronously; return (paths, reason).
+
+    paths: ALL downloaded media files in out_dir (sorted by filename so
+    carousel order is preserved). Empty list = failure.
+    reason: short classification of why the download failed (None on
+    success, or when failure cause isn't recognised). The handler uses
+    this to pick a more useful user-facing message than the generic
+    "Couldn't download".
+    """
+    captured_errors: list[str] = []
+
+    class _Capture(_YDLLogger):
+        def error(self, msg):
+            captured_errors.append(msg)
+            super().error(msg)
+
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -166,21 +211,30 @@ def _download_blocking(url: str, out_dir: str) -> list[str]:
         "fragment_retries": 2,
         "format": "best[ext=mp4]/best",
         "age_limit": 100,
-        # ignoreerrors=True so yt-dlp prints errors instead of raising —
-        # we detect failure by checking for downloaded files.
+        # ignoreerrors=True so yt-dlp returns instead of raising — we
+        # detect failure by checking for downloaded files and inspect
+        # captured_errors for the real reason.
         "ignoreerrors": True,
+        "logger": _Capture(),
     }
     # Tempfile copy of instagram_cookies.txt — yt-dlp will write its
     # post-request jar to the tempfile, master stays pristine.
     ck = cookies_for_url(url)
     if ck:
         opts["cookiefile"] = ck
+    else:
+        logger.warning(
+            "instagram: no cookies for %s — INSTAGRAM_COOKIES_FILE unset "
+            "or path missing on disk. IG blocks datacenter IPs without "
+            "a logged-in cookies jar; the download is likely to fail.",
+            url,
+        )
     try:
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
     except Exception as exc:
         logger.info("instagram: yt-dlp raised %s: %s", type(exc).__name__, str(exc)[:200])
-        return []
+        return [], _classify_ydl_error(str(exc))
     # Collect ALL media files (videos + images), sorted by name for
     # carousel order. A carousel whose first item is a photo previously
     # tripped the video-only filter and reported total failure.
@@ -189,13 +243,23 @@ def _download_blocking(url: str, out_dir: str) -> list[str]:
         low = name.lower()
         if low.endswith(_VIDEO_EXTS) or low.endswith(_PHOTO_EXTS):
             found.append(os.path.join(out_dir, name))
-    return found
+    if found:
+        return found, None
+    # No files but no raised exception either — yt-dlp ate the error.
+    # Look at the captured error strings to classify.
+    reason = None
+    for err in captured_errors:
+        reason = _classify_ydl_error(err)
+        if reason:
+            break
+    return [], reason
 
 
-async def _download(url: str) -> list[str]:
+async def _download(url: str) -> tuple[list[str], str | None]:
     """Async wrapper. Tries the external media API first (if configured),
-    falls back to in-process yt-dlp. Returns the list of media paths
-    (empty list = failure). Caller owns the temp directory lifetime.
+    falls back to in-process yt-dlp. Returns (paths, reason) — empty
+    paths means failure, reason classifies why for the user-facing
+    message. Caller owns the temp directory lifetime.
     """
     tmp_dir = tempfile.mkdtemp(prefix="ig_dl_")
 
@@ -208,17 +272,19 @@ async def _download(url: str) -> list[str]:
             api_paths = []
         if api_paths:
             logger.info("instagram: served via media API: %d file(s)", len(api_paths))
-            return [str(p) for p in api_paths]
+            return [str(p) for p in api_paths], None
 
     # In-process yt-dlp fallback (also the only path when API is disabled).
+    reason: str | None = None
     try:
-        paths = await asyncio.wait_for(
+        paths, reason = await asyncio.wait_for(
             asyncio.to_thread(_download_blocking, url, tmp_dir),
             timeout=60,
         )
     except asyncio.TimeoutError:
         logger.info("instagram: download timed out after 60s for %s", url)
         paths = []
+        reason = "timeout"
     if not paths:
         try:
             for n in os.listdir(tmp_dir):
@@ -226,8 +292,8 @@ async def _download(url: str) -> list[str]:
             os.rmdir(tmp_dir)
         except OSError:
             pass
-        return []
-    return paths
+        return [], reason
+    return paths, reason
 
 
 async def _delete_silently(message) -> None:
@@ -325,17 +391,25 @@ async def instagram_auto_download(client, message):
         except Exception:
             logger.info("instagram: status reply failed, continuing without it")
 
-        paths = await _download(url)
+        paths, reason = await _download(url)
 
         if not paths:
+            user_msg = {
+                "cookies": (
+                    "🍪 Instagram needs a login to serve this from the bot's "
+                    "IP. The owner must set INSTAGRAM_COOKIES_FILE to a "
+                    "valid cookies.txt exported from a logged-in browser."
+                ),
+                "private": "🔒 That post is from a private account.",
+                "unavailable": "❌ That post is gone or geo-blocked.",
+                "timeout": "⌛ Instagram timed out — try again in a moment.",
+            }.get(reason, "❌ Couldn't download that Instagram link.")
             if status:
                 try:
-                    await status.edit_text(
-                        "❌ Couldn't download that Instagram link."
-                    )
+                    await status.edit_text(user_msg)
                 except Exception:
                     pass
-                await asyncio.sleep(4)
+                await asyncio.sleep(6)
                 await _delete_silently(status)
             return
 
