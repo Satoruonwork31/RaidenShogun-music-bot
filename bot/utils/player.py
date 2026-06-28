@@ -7,31 +7,75 @@ not a bot" check that hits `android` and `web` from server IPs.
 
 If COOKIES_FILE env var is set, cookies are passed in addition — which makes
 every client more reliable.
+
+Cookie-clobber defense: yt-dlp opens `cookiefile` read-write and saves
+the post-request cookie jar back to disk. When Instagram soft-bans the
+session, its response wipes the `sessionid` cookie, and yt-dlp persists
+that empty state — so the master `instagram_cookies.txt` degrades from a
+valid auth jar to junk after a single bad response. To avoid that we
+hand yt-dlp a per-request *tempfile copy* of the master jar and never
+let it touch the master. The tempfiles are cleaned up at process exit.
 """
 
+import atexit
+import logging
 import os
+import shutil
+import tempfile
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import ExtractorError, DownloadError
 
+logger = logging.getLogger("RaidenShogun.player")
+
 COOKIES_FILE = os.getenv("COOKIES_FILE", "")
 INSTAGRAM_COOKIES_FILE = os.getenv("INSTAGRAM_COOKIES_FILE", "")
 
+_COOKIE_TEMPFILES: list[str] = []
 
-def cookies_for_url(url) -> str:
-    """Pick the right cookies file for a URL. Returns "" if none configured.
 
-    Instagram and YouTube each block datacenter IPs unless requests come
-    from a logged-in browser session, but they use entirely separate
-    cookie jars — feeding YT cookies into IG (or vice versa) does
-    nothing and risks confusing yt-dlp's extractor. Dispatch by host.
-    """
+def _cleanup_cookie_tempfiles():
+    for p in _COOKIE_TEMPFILES:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+atexit.register(_cleanup_cookie_tempfiles)
+
+
+def _master_cookies_for_url(url) -> str:
     if not isinstance(url, str):
         return COOKIES_FILE
     u = url.lower()
     if ("instagram.com" in u or "instagr.am" in u) and INSTAGRAM_COOKIES_FILE:
         return INSTAGRAM_COOKIES_FILE
     return COOKIES_FILE
+
+
+def cookies_for_url(url) -> str:
+    """Pick the right cookies file for a URL and return a tempfile copy
+    so yt-dlp's cookie writeback can't degrade the master jar. Returns
+    "" if no master is configured for this URL's host.
+
+    Instagram and YouTube each block datacenter IPs unless requests come
+    from a logged-in browser session, but they use entirely separate
+    cookie jars — feeding YT cookies into IG (or vice versa) does
+    nothing and risks confusing yt-dlp's extractor. Dispatch by host.
+    """
+    master = _master_cookies_for_url(url)
+    if not master or not os.path.exists(master):
+        return ""
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".txt", prefix="cookies_")
+        os.close(fd)
+        shutil.copy2(master, tmp)
+        _COOKIE_TEMPFILES.append(tmp)
+        return tmp
+    except OSError as exc:
+        logger.warning("cookies_for_url: tempfile copy of %s failed: %s — falling back to master", master, exc)
+        return master
 
 
 class YouTubeAuthRequiredError(Exception):
