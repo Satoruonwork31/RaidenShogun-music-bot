@@ -102,6 +102,30 @@ async def _run():
             cookies_path,
         )
 
+    # Media API diagnostics — only ping if MEDIA_API_URL is set, so a bot
+    # without the external service runs unchanged. A misconfigured URL or
+    # a down service is visible in the log immediately instead of being
+    # discovered on the first real IG/Pinterest paste.
+    from bot.config import MEDIA_API_URL
+    if MEDIA_API_URL:
+        from bot.utils.media_api_client import health_check
+        try:
+            ok, detail = await health_check()
+            if ok:
+                logger.info("MEDIA_API reachable at %s — %s", MEDIA_API_URL, detail)
+            else:
+                logger.warning(
+                    "MEDIA_API at %s is NOT reachable: %s — IG/Pinterest will "
+                    "fall through to in-process yt-dlp.",
+                    MEDIA_API_URL, detail,
+                )
+        except Exception as exc:
+            logger.warning(
+                "MEDIA_API health check raised %s: %s — IG/Pinterest will "
+                "fall through to in-process yt-dlp.",
+                type(exc).__name__, exc,
+            )
+
     # Empirical membership snapshot — list every chat the userbot is
     # currently a member of. Greetings/departure delivery via the userbot
     # ChatMemberUpdated path depends on the userbot being in the chat at

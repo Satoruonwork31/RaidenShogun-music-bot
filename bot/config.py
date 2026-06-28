@@ -18,6 +18,15 @@ STRING_SESSION = os.getenv("STRING_SESSION")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 
+# Optional external media-downloader microservice. If MEDIA_API_URL is set,
+# Instagram and Pinterest downloads call it first (POST {url}/download with
+# X-API-Key) and only fall through to the in-process yt-dlp path if the API
+# returns no file. Unset = entirely disabled; in-process yt-dlp is the only
+# path and behavior is identical to before this integration. YouTube never
+# touches the API — its existing cookie/proxy chain stays the only path.
+MEDIA_API_URL = os.getenv("MEDIA_API_URL", "").strip().rstrip("/")
+MEDIA_API_KEY = os.getenv("MEDIA_API_KEY", "").strip()
+
 
 def _parse_proxy_url(raw: str) -> dict | None:
     """Parse PROXY_URL into a pyrofork-compatible proxy config.

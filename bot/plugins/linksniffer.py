@@ -16,12 +16,23 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+from pathlib import Path
 
 from pyrogram import Client, filters
 from pyrogram.enums import ButtonStyle, ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.utils.downloader import check_size_and_duration, download_audio, download_video
+from bot.utils.downloader import (
+    MAX_FILE_BYTES,
+    check_size_and_duration,
+    download_audio,
+    download_video,
+)
+from bot.utils.media_api_client import (
+    fetch_via_api,
+    is_enabled as media_api_enabled,
+)
 from bot.utils.player import YouTubeAuthRequiredError, _try_extract
 
 logger = logging.getLogger("RaidenShogun.linksniffer")
@@ -315,6 +326,7 @@ async def link_sniffer(client, message):
 
     status = None
     path = None
+    api_tmp_dir = None
     try:
         status = await message.reply_text(
             "📥 Detected a link — pulling it down…",
@@ -323,6 +335,51 @@ async def link_sniffer(client, message):
         )
 
         is_pin = _is_pinterest(url)
+
+        # ── External media API first (IG + Pinterest only) ──────────────
+        # Instagram is normally short-circuited at the top of this handler
+        # and served by bot/plugins/instagram.py, which has its own API
+        # integration. The IG branch below is dead in practice but kept
+        # in case the short-circuit is ever removed.
+        api_eligible = is_pin or "instagram.com/" in url.lower()
+        if api_eligible and media_api_enabled():
+            import tempfile as _tempfile
+            api_tmp_dir = _tempfile.mkdtemp(prefix="linksniffer_api_")
+            try:
+                api_path = await fetch_via_api(url, Path(api_tmp_dir))
+            except Exception:
+                logger.exception("link_sniffer: media_api raised — falling back")
+                api_path = None
+            if api_path:
+                api_path_str = str(api_path)
+                size = os.path.getsize(api_path_str) if os.path.exists(api_path_str) else 0
+                if size > MAX_FILE_BYTES:
+                    mb = int(size / 1_000_000)
+                    await status.edit_text(
+                        f"❌ That file is ~{mb} MB — over the 1500 MB upload cap."
+                    )
+                    return
+                title = api_path.stem or "video"
+                await status.edit_text(f"📤 Uploading: {title}")
+                logger.info(
+                    "link_sniffer: media_api delivered %s for %s (%d bytes) — uploading",
+                    api_path_str, url, size,
+                )
+                # Don't pass yt-dlp-style metadata; Telegram autogenerates.
+                sent_ok = await _try_uploads(
+                    client, chat_id, message.id, api_path_str, title,
+                    duration=0, width=0, height=0, direct_url=None,
+                )
+                if not sent_ok:
+                    await status.edit_text(
+                        f"❌ Downloaded but Telegram upload kept timing out.\nTitle: {title}"
+                    )
+                    return
+                try:
+                    await status.delete()
+                except Exception:
+                    pass
+                return  # API path done — skip the entire in-process flow.
 
         # video=True so yt-dlp picks a video format (not bestaudio). Without
         # this, the resolved info["url"] is the audio stream, which Telegram
@@ -415,6 +472,8 @@ async def link_sniffer(client, message):
                 os.remove(path)
             except OSError:
                 pass
+        if api_tmp_dir:
+            shutil.rmtree(api_tmp_dir, ignore_errors=True)
         async with _BUSY_LOCK:
             _BUSY.discard(chat_id)
 

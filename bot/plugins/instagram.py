@@ -38,11 +38,14 @@ import re
 import tempfile
 from collections import OrderedDict
 
+from pathlib import Path
+
 from yt_dlp import YoutubeDL
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 
+from bot.utils.media_api_client import fetch_via_api, is_enabled as media_api_enabled
 from bot.utils.player import cookies_for_url
 
 logger = logging.getLogger("RaidenShogun.instagram")
@@ -163,10 +166,24 @@ def _download_blocking(url: str, out_dir: str) -> str | None:
 
 
 async def _download(url: str) -> str | None:
-    """Async wrapper with a 60s wall-clock cap. Returns the path or None.
-    Caller owns the temp directory lifetime.
+    """Async wrapper. Tries the external media API first (if configured),
+    falls back to in-process yt-dlp. Returns the path or None. Caller
+    owns the temp directory lifetime.
     """
     tmp_dir = tempfile.mkdtemp(prefix="ig_dl_")
+
+    # External media API first — when configured. Unset = silently skip.
+    if media_api_enabled():
+        try:
+            api_path = await fetch_via_api(url, Path(tmp_dir))
+        except Exception:
+            logger.exception("instagram: media_api raised — falling back to yt-dlp")
+            api_path = None
+        if api_path:
+            logger.info("instagram: served via media API: %s", api_path)
+            return str(api_path)
+
+    # In-process yt-dlp fallback (also the only path when API is disabled).
     try:
         path = await asyncio.wait_for(
             asyncio.to_thread(_download_blocking, url, tmp_dir),
@@ -176,7 +193,6 @@ async def _download(url: str) -> str | None:
         logger.info("instagram: download timed out after 60s for %s", url)
         path = None
     if not path:
-        # Clean the now-empty tmp dir — nothing to send.
         try:
             for n in os.listdir(tmp_dir):
                 os.remove(os.path.join(tmp_dir, n))
