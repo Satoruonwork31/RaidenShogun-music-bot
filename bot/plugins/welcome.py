@@ -84,19 +84,29 @@ async def _is_chat_owner_or_admin(client, chat_id: int, user_id: int) -> bool:
 async def welcome_new_members(client, message):
     """Legacy path used by regular groups (plain join service message)."""
     import logging as _l
-    _l.getLogger("RaidenShogun.welcome").info(
+    log = _l.getLogger("RaidenShogun.welcome")
+    log.info(
         "welcome_new_members (legacy new_chat_members) FIRED in chat=%s, members=%s",
         message.chat.id if message.chat else None,
         [u.id for u in (message.new_chat_members or [])],
     )
     if not is_enabled(message.chat.id):
+        log.info("welcome_new_members: greetings DISABLED for chat=%s — skipping", message.chat.id)
         return
     for user in message.new_chat_members:
         if user.is_bot:
             continue
-        if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
+        if _event_seen_recently(message.chat.id, user.id, "join"):
+            log.info("welcome_new_members: dedup hit for user=%s — already handled", user.id)
             continue
-        await _send_card(client, message.chat.id, user)
+        if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
+            log.info("welcome_new_members: user %s is owner/admin — skipping", user.id)
+            continue
+        try:
+            await _send_card(client, message.chat.id, user)
+            log.info("welcome_new_members: card sent chat=%s user=%s", message.chat.id, user.id)
+        except Exception:
+            log.exception("welcome_new_members: _send_card raised")
 
 
 _JOIN_FROM = (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED)
@@ -120,19 +130,58 @@ async def _send_leave(client, chat_id: int, user) -> None:
 
 @Client.on_message(filters.left_chat_member & filters.group)
 async def leave_legacy(client, message):
+    import logging as _l
+    log = _l.getLogger("RaidenShogun.welcome")
+    log.info(
+        "leave_legacy FIRED in chat=%s, user=%s",
+        message.chat.id if message.chat else None,
+        message.left_chat_member.id if message.left_chat_member else None,
+    )
     if not departure_enabled(message.chat.id):
+        log.info("leave_legacy: departure DISABLED for chat=%s — skipping", message.chat.id)
         return
     user = message.left_chat_member
     if not user or user.is_bot:
         return
-    if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
+    if _event_seen_recently(message.chat.id, user.id, "leave"):
+        log.info("leave_legacy: dedup hit for user=%s — already handled", user.id)
         return
-    await _send_leave(client, message.chat.id, user)
+    if await _is_chat_owner_or_admin(client, message.chat.id, user.id):
+        log.info("leave_legacy: user %s is owner/admin — skipping", user.id)
+        return
+    try:
+        await _send_leave(client, message.chat.id, user)
+        log.info("leave_legacy: farewell sent chat=%s user=%s", message.chat.id, user.id)
+    except Exception:
+        log.exception("leave_legacy: _send_leave raised")
 
 
 import logging as _logging
+import time as _time
 
 _chat_member_log = _logging.getLogger("RaidenShogun.welcome")
+
+# Per-(chat,user,kind) dedup so the four overlapping delivery paths
+# (legacy service-message, bot ChatMemberUpdated, bot raw bridge,
+# userbot raw bridge) don't send 4 welcome cards for one join.
+# Insertion order = monotonic time; entries older than _DEDUP_TTL_S
+# expire lazily on next check.
+_event_dedup: "dict[tuple[int, int, str], float]" = {}
+_DEDUP_TTL_S = 30.0
+
+
+def _event_seen_recently(chat_id: int, user_id: int, kind: str) -> bool:
+    now = _time.monotonic()
+    # Lazy expiry
+    if _event_dedup:
+        stale = [k for k, t in _event_dedup.items() if now - t > _DEDUP_TTL_S]
+        for k in stale:
+            _event_dedup.pop(k, None)
+    key = (chat_id, user_id, kind)
+    if key in _event_dedup and now - _event_dedup[key] < _DEDUP_TTL_S:
+        return True
+    _event_dedup[key] = now
+    return False
 
 
 async def handle_chat_member_event(bot_client, chat_member_updated, source: str = "?"):
@@ -167,7 +216,10 @@ async def handle_chat_member_event(bot_client, chat_member_updated, source: str 
     chat_id = chat_member_updated.chat.id
     old_status = old_member.status if old_member else ChatMemberStatus.LEFT
     if old_status in _JOIN_FROM and new_member.status in _JOIN_TO:
-        _chat_member_log.info("classification=JOIN chat=%s user=%s", chat_id, new_member.user.id)
+        _chat_member_log.info("classification=JOIN chat=%s user=%s source=%s", chat_id, new_member.user.id, source)
+        if _event_seen_recently(chat_id, new_member.user.id, "join"):
+            _chat_member_log.info("JOIN dedup hit (already handled within %ss) — skipping", _DEDUP_TTL_S)
+            return
         if not is_enabled(chat_id):
             _chat_member_log.info("JOIN skipped: greetings.is_enabled(%s)=False", chat_id)
             return
@@ -182,7 +234,10 @@ async def handle_chat_member_event(bot_client, chat_member_updated, source: str 
             _chat_member_log.exception("JOIN _send_card raised")
         return
     if old_status in _LEAVE_FROM and new_member.status in _LEAVE_TO:
-        _chat_member_log.info("classification=LEAVE chat=%s user=%s", chat_id, new_member.user.id)
+        _chat_member_log.info("classification=LEAVE chat=%s user=%s source=%s", chat_id, new_member.user.id, source)
+        if _event_seen_recently(chat_id, new_member.user.id, "leave"):
+            _chat_member_log.info("LEAVE dedup hit (already handled within %ss) — skipping", _DEDUP_TTL_S)
+            return
         if not departure_enabled(chat_id):
             _chat_member_log.info("LEAVE skipped: departure.is_enabled(%s)=False", chat_id)
             return
@@ -204,16 +259,127 @@ async def handle_chat_member_event(bot_client, chat_member_updated, source: str 
 
 @Client.on_chat_member_updated()
 async def welcome_via_chat_member(client, chat_member_updated):
-    """Bot-side subscription. May or may not fire reliably (see
-    `handle_chat_member_event` docstring); the userbot-side
-    subscription in bot/start.py is the always-on path.
+    """Bot-side ChatMemberUpdated. Pyrofork 2.x has dropped these silently
+    in some setups; the on_raw_update path below catches the underlying
+    UpdateChannelParticipant directly as a belt-and-braces fallback.
     """
-    # Entry log BEFORE dispatch, separate from handle_chat_member_event's
-    # own logging, so we can confirm the BOT account is receiving
-    # ChatMemberUpdated at all — independent of the userbot path.
     _chat_member_log.info(
         "welcome_via_chat_member (BOT-side ChatMemberUpdated) FIRED in chat=%s",
         chat_member_updated.chat.id if chat_member_updated.chat else None,
     )
     from bot.client import app
     await handle_chat_member_event(app, chat_member_updated, source="bot")
+
+
+# Always-on raw participant update bridge.
+# Pyrofork's ChatMemberUpdatedHandler can silently drop the parsed
+# ChatMemberUpdated event in 2.x — observed in our logs (loaded but
+# never fires even for admin bots). UpdateChannelParticipant /
+# UpdateChatParticipant arrive on the raw stream regardless, so we
+# parse them ourselves and dispatch to the same handle_chat_member_event
+# logic the rest of the file uses.
+def _participant_status(p) -> ChatMemberStatus:
+    if p is None:
+        return ChatMemberStatus.LEFT
+    name = type(p).__name__
+    # Common pyrogram raw types: ChannelParticipant, ChannelParticipantSelf,
+    # ChannelParticipantCreator, ChannelParticipantAdmin,
+    # ChannelParticipantBanned, ChannelParticipantLeft,
+    # ChatParticipant, ChatParticipantCreator, ChatParticipantAdmin
+    if "Left" in name:
+        return ChatMemberStatus.LEFT
+    if "Banned" in name or "Kicked" in name:
+        return ChatMemberStatus.BANNED
+    if "Creator" in name:
+        return ChatMemberStatus.OWNER
+    if "Admin" in name:
+        return ChatMemberStatus.ADMINISTRATOR
+    return ChatMemberStatus.MEMBER
+
+
+def _participant_user_id(p) -> int | None:
+    if p is None:
+        return None
+    for attr in ("user_id", "peer"):
+        v = getattr(p, attr, None)
+        if v is None:
+            continue
+        if isinstance(v, int):
+            return v
+        uid = getattr(v, "user_id", None)
+        if isinstance(uid, int):
+            return uid
+    return None
+
+
+@Client.on_raw_update()
+async def _raw_participant_bridge(client, update, users, chats):
+    cls = type(update).__name__
+    if cls not in ("UpdateChannelParticipant", "UpdateChatParticipant"):
+        return
+    try:
+        prev = getattr(update, "prev_participant", None)
+        new = getattr(update, "new_participant", None)
+        old_status = _participant_status(prev)
+        new_status = _participant_status(new)
+
+        # Determine which chat_id (-100... for channels, negative int for chats)
+        if cls == "UpdateChannelParticipant":
+            channel_id = update.channel_id
+            chat_id = int(f"-100{channel_id}")
+        else:
+            chat_id = -update.chat_id
+
+        # Pyrofork ChatMemberStatus checks against MEMBER/RESTRICTED for new
+        # status when joining. Our existing _JOIN_FROM/_LEAVE_FROM tuples
+        # use the same enum so we can drive `handle_chat_member_event`
+        # logic with a stub object that exposes .chat, .new_chat_member,
+        # .old_chat_member with .status / .user (.id, .is_bot, .first_name…).
+        user_id = _participant_user_id(new) or _participant_user_id(prev)
+        if user_id is None:
+            return
+        # Filter bot self-events: skip if user_id matches our own bot id
+        try:
+            me = await client.get_me()
+            if me and user_id == me.id:
+                return
+        except Exception:
+            pass
+
+        # Resolve a User object so the welcome card / farewell can name them.
+        try:
+            user_obj = await client.get_users(user_id)
+        except Exception:
+            user_obj = None
+        if user_obj is None or getattr(user_obj, "is_bot", False):
+            return
+
+        # Resolve Chat for chat_member_updated.chat.id semantics.
+        try:
+            chat_obj = await client.get_chat(chat_id)
+        except Exception:
+            class _C:
+                pass
+            chat_obj = _C()
+            chat_obj.id = chat_id
+
+        class _Member:
+            pass
+
+        old_m = _Member(); old_m.status = old_status; old_m.user = user_obj
+        new_m = _Member(); new_m.status = new_status; new_m.user = user_obj
+
+        class _Evt:
+            pass
+        evt = _Evt()
+        evt.chat = chat_obj
+        evt.old_chat_member = old_m
+        evt.new_chat_member = new_m
+
+        _chat_member_log.info(
+            "raw_participant_bridge: %s chat=%s user=%s old=%s new=%s",
+            cls, chat_id, user_id, old_status, new_status,
+        )
+        await handle_chat_member_event(client, evt, source="raw")
+    except Exception:
+        _chat_member_log.exception("raw_participant_bridge crashed for %s", cls)

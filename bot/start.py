@@ -72,8 +72,11 @@ async def _run():
     # conditions, and pyrofork 2.3.69 has had inconsistent behaviour
     # there. The userbot is a regular user — it gets these unconditionally
     # for every chat it's in.
-    from pyrogram.handlers import ChatMemberUpdatedHandler
-    from bot.plugins.welcome import handle_chat_member_event
+    from pyrogram.handlers import ChatMemberUpdatedHandler, RawUpdateHandler
+    from bot.plugins.welcome import (
+        handle_chat_member_event,
+        _raw_participant_bridge,
+    )
 
     async def _userbot_member_dispatch(_client, chat_member_updated):
         try:
@@ -82,7 +85,19 @@ async def _run():
             logger.exception("userbot chat_member_updated dispatch failed")
 
     userbot.add_handler(ChatMemberUpdatedHandler(_userbot_member_dispatch))
-    logger.info("Registered userbot ChatMemberUpdated dispatch")
+
+    # Same raw participant bridge that's registered on the bot, attached
+    # to the userbot too. Userbots receive UpdateChannelParticipant only
+    # for chats where they are admin, but it's still useful coverage:
+    # when both sides see the event we de-dupe later via chat+user+status.
+    async def _userbot_raw_bridge(_client, update, users, chats):
+        try:
+            await _raw_participant_bridge(app, update, users, chats)
+        except Exception:
+            logger.exception("userbot raw participant bridge failed")
+
+    userbot.add_handler(RawUpdateHandler(_userbot_raw_bridge))
+    logger.info("Registered userbot ChatMemberUpdated dispatch + raw bridge")
 
     # Cookie diagnostics — a typo'd COOKIES_FILE path silently behaves
     # the same as unset, so surface the real state at boot.
