@@ -312,9 +312,26 @@ def _participant_user_id(p) -> int | None:
     return None
 
 
-@Client.on_raw_update()
+_RAW_TYPE_COUNTS: dict[str, int] = {}
+
+
+# Intentionally NOT decorated with @Client.on_raw_update() — pyrofork's
+# plugin loader adds raw handlers to group=0, where they're starved by
+# parsed handlers earlier in the iteration (first matching handler in
+# the group fires + breaks). bot/start.py registers this function in
+# its own group=-9999 via app.add_handler so it fires for every update.
 async def _raw_participant_bridge(client, update, users, chats):
     cls = type(update).__name__
+    # Debug: count + occasionally dump every update type the bot
+    # actually receives, so 'why isn't the participant event firing'
+    # is answerable from the log.
+    _RAW_TYPE_COUNTS[cls] = _RAW_TYPE_COUNTS.get(cls, 0) + 1
+    if _RAW_TYPE_COUNTS[cls] in (1, 10, 100, 1000):
+        _chat_member_log.info(
+            "raw_update seen: cls=%s count=%d (cumulative type histogram: %s)",
+            cls, _RAW_TYPE_COUNTS[cls],
+            ", ".join(f"{k}={v}" for k, v in sorted(_RAW_TYPE_COUNTS.items(), key=lambda kv: -kv[1])[:12]),
+        )
     if cls not in ("UpdateChannelParticipant", "UpdateChatParticipant"):
         return
     try:

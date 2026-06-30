@@ -87,9 +87,7 @@ async def _run():
     userbot.add_handler(ChatMemberUpdatedHandler(_userbot_member_dispatch))
 
     # Same raw participant bridge that's registered on the bot, attached
-    # to the userbot too. Userbots receive UpdateChannelParticipant only
-    # for chats where they are admin, but it's still useful coverage:
-    # when both sides see the event we de-dupe later via chat+user+status.
+    # to the userbot too.
     async def _userbot_raw_bridge(_client, update, users, chats):
         try:
             await _raw_participant_bridge(app, update, users, chats)
@@ -97,7 +95,32 @@ async def _run():
             logger.exception("userbot raw participant bridge failed")
 
     userbot.add_handler(RawUpdateHandler(_userbot_raw_bridge))
-    logger.info("Registered userbot ChatMemberUpdated dispatch + raw bridge")
+
+    # ALSO register the bridge on the BOT client programmatically.
+    # pyrofork 2.2.21 plugin-scanner loads RawUpdateHandler decorators
+    # ("[LOAD] RawUpdateHandler ... in group 0") but the Dispatcher does
+    # not invoke them at runtime — verified empirically. Explicit
+    # add_handler bypasses the broken plugin path.
+    async def _app_raw_bridge(_client, update, users, chats):
+        try:
+            await _raw_participant_bridge(app, update, users, chats)
+        except Exception:
+            logger.exception("bot raw participant bridge failed")
+
+    app.add_handler(RawUpdateHandler(_app_raw_bridge), group=-9999)
+    logger.info("Registered userbot + bot ChatMemberUpdated dispatch + raw bridge (programmatic)")
+
+    # Diagnostic: dump the groups dict on both dispatchers so we can
+    # confirm RawUpdateHandler is actually in the runtime handler list.
+    for label, cli in (("bot", app), ("userbot", userbot)):
+        try:
+            groups = cli.dispatcher.groups
+            summary = []
+            for grp, hs in groups.items():
+                summary.append(f"g{grp}=" + ",".join(type(h).__name__ for h in hs))
+            logger.info("dispatcher[%s] handler groups: %s", label, " | ".join(summary)[:1200])
+        except Exception:
+            logger.exception("could not dump dispatcher groups for %s", label)
 
     # Cookie diagnostics — a typo'd COOKIES_FILE path silently behaves
     # the same as unset, so surface the real state at boot.
