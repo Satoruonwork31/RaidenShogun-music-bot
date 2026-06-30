@@ -320,6 +320,126 @@ _RAW_TYPE_COUNTS: dict[str, int] = {}
 # parsed handlers earlier in the iteration (first matching handler in
 # the group fires + breaks). bot/start.py registers this function in
 # its own group=-9999 via app.add_handler so it fires for every update.
+_POLL_INTERVAL_S = 45
+_member_snapshot: dict[int, set[int]] = {}
+_poll_log = _logging.getLogger("RaidenShogun.welcome.poll")
+
+
+async def _list_chats_to_poll(client_app) -> list[int]:
+    """Read the chat registry the broadcast plugin maintains. all_chats
+    is sync but cheap (in-memory list).
+    """
+    try:
+        from bot.utils.chats import all_chats
+        return [c for c in all_chats() if c < 0]
+    except Exception:
+        _poll_log.exception("could not load chat registry; polling disabled this cycle")
+        return []
+
+
+async def _snapshot_members(client_app, chat_id: int) -> set[int] | None:
+    """Return a set of human member ids in chat_id, or None on error.
+    Bots are filtered. Requires bot to be admin with member-list rights.
+    """
+    members: set[int] = set()
+    try:
+        async for m in client_app.get_chat_members(chat_id):
+            user = getattr(m, "user", None)
+            if user is None or getattr(user, "is_bot", False):
+                continue
+            uid = getattr(user, "id", None)
+            if uid is not None:
+                members.add(uid)
+        return members
+    except Exception as exc:
+        _poll_log.info("snapshot failed for chat=%s: %s", chat_id, exc)
+        return None
+
+
+async def _fire_join_poll(client_app, chat_id: int, user_id: int) -> None:
+    """Build a synthetic ChatMemberUpdated and dispatch via the same
+    handle_chat_member_event used by every other delivery path.
+    """
+    try:
+        user_obj = await client_app.get_users(user_id)
+    except Exception:
+        return
+    if user_obj is None or getattr(user_obj, "is_bot", False):
+        return
+    try:
+        chat_obj = await client_app.get_chat(chat_id)
+    except Exception:
+        class _C: pass
+        chat_obj = _C(); chat_obj.id = chat_id
+
+    class _M: pass
+    om = _M(); om.status = ChatMemberStatus.LEFT; om.user = user_obj
+    nm = _M(); nm.status = ChatMemberStatus.MEMBER; nm.user = user_obj
+    class _E: pass
+    e = _E(); e.chat = chat_obj; e.old_chat_member = om; e.new_chat_member = nm
+    await handle_chat_member_event(client_app, e, source="poll")
+
+
+async def _fire_leave_poll(client_app, chat_id: int, user_id: int) -> None:
+    try:
+        user_obj = await client_app.get_users(user_id)
+    except Exception:
+        return
+    if user_obj is None or getattr(user_obj, "is_bot", False):
+        return
+    try:
+        chat_obj = await client_app.get_chat(chat_id)
+    except Exception:
+        class _C: pass
+        chat_obj = _C(); chat_obj.id = chat_id
+
+    class _M: pass
+    om = _M(); om.status = ChatMemberStatus.MEMBER; om.user = user_obj
+    nm = _M(); nm.status = ChatMemberStatus.LEFT; nm.user = user_obj
+    class _E: pass
+    e = _E(); e.chat = chat_obj; e.old_chat_member = om; e.new_chat_member = nm
+    await handle_chat_member_event(client_app, e, source="poll")
+
+
+async def poll_participants_forever(client_app) -> None:
+    """Per-chat membership snapshot loop. First pass establishes the
+    baseline (no events fired). Subsequent passes diff against the
+    previous snapshot and fire welcomes/farewells for new/missing ids.
+    Failures per chat are caught individually — one bad chat doesn't
+    stall the rest. Interval gated by _POLL_INTERVAL_S.
+    """
+    import asyncio as _a
+    while True:
+        try:
+            chats = await _list_chats_to_poll(client_app)
+            for cid in chats:
+                snap = await _snapshot_members(client_app, cid)
+                if snap is None:
+                    continue
+                prev = _member_snapshot.get(cid)
+                _member_snapshot[cid] = snap
+                if prev is None:
+                    _poll_log.info("baseline established chat=%s members=%d", cid, len(snap))
+                    continue
+                joined = snap - prev
+                left = prev - snap
+                if joined or left:
+                    _poll_log.info("poll chat=%s joined=%d left=%d", cid, len(joined), len(left))
+                for uid in joined:
+                    try:
+                        await _fire_join_poll(client_app, cid, uid)
+                    except Exception:
+                        _poll_log.exception("poll join dispatch failed")
+                for uid in left:
+                    try:
+                        await _fire_leave_poll(client_app, cid, uid)
+                    except Exception:
+                        _poll_log.exception("poll leave dispatch failed")
+        except Exception:
+            _poll_log.exception("polling loop iteration crashed")
+        await _a.sleep(_POLL_INTERVAL_S)
+
+
 async def _raw_participant_bridge(client, update, users, chats):
     cls = type(update).__name__
     # Debug: count + occasionally dump every update type the bot

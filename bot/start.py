@@ -110,6 +110,16 @@ async def _run():
     app.add_handler(RawUpdateHandler(_app_raw_bridge), group=-9999)
     logger.info("Registered userbot + bot ChatMemberUpdated dispatch + raw bridge (programmatic)")
 
+    # Polling fallback. Telegram MTProto stops pushing
+    # UpdateChannelParticipant to bot accounts in some scopes — verified
+    # empirically: bot is admin everywhere with full rights yet zero
+    # participant updates arrive even while message updates flow normally.
+    # Periodically snapshot membership and fire join/leave for diffs so
+    # greetings/departures work regardless of update delivery.
+    from bot.plugins.welcome import poll_participants_forever
+    asyncio.create_task(poll_participants_forever(app))
+    logger.info("Started participant polling loop")
+
     # Diagnostic: dump the groups dict on both dispatchers so we can
     # confirm RawUpdateHandler is actually in the runtime handler list.
     for label, cli in (("bot", app), ("userbot", userbot)):
